@@ -4,3 +4,7 @@ azure-data-tables
 Pillow
 azure-communication-email
 dotenv
+
+# for testing
+pytest
+pytest-asyncio
