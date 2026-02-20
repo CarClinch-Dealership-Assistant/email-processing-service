@@ -4,8 +4,8 @@ import pytest
 from function_app import orchestrator_function, sb_trigger
 
 """ 
-INTEGRATION TESTS:
-this test file contains integration tests that cover the interaction 
+COMPONENT TESTS:
+this test file contains component tests that cover the interaction 
 b/t the Service Bus trigger, the DF orchestrator, and the activity function.
 The tests use fake implementations of the Service Bus message 
 and Durable orchestration to simulate the flow of data through the system.
