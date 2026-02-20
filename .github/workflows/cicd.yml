@@ -35,7 +35,7 @@ jobs:
     needs: test
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4cd 
+        uses: actions/checkout@v4
       - name: Log in to DockerHub
         uses: docker/login-action@v3
         with:
