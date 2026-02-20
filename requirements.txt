@@ -1,0 +1,6 @@
+azure-functions
+azure-functions-durable
+azure-data-tables
+Pillow
+azure-communication-email
+dotenv
