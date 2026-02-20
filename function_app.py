@@ -56,10 +56,7 @@ def build_email_body(data: dict):
 async def sb_trigger(msg: func.ServiceBusMessage,
     client: df.DurableOrchestrationClient):
     data = json.loads(msg.get_body())
-
     logging.info(f"New message: {data} ")
-
-
 
     # Start the orchestrator (same concept as Week 4's client.start_new)
     instance_id = await client.start_new(
@@ -101,8 +98,8 @@ def send_email(inputData: dict):
                 {
                     # "address": inputData["lead"]["email"],
                     # "displayName": "{} {}".format(inputData["lead"]["fname"], inputData["lead"]["lname"])
-                    "address": "rongjunfeng09@gmail.com",
-                    "displayName": "Junfeng Rong"
+                    "address": "carclinch-dev@outlook.com",
+                    "displayName": "CarClinch Dev"
                 }
             ]
         }
