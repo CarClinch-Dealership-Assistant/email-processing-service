@@ -6,13 +6,12 @@ on:
   pull_request:
     branches:
       - "main"
-    types:
-      - closed
+    # types:
+    #   - closed
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.merged == true 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
