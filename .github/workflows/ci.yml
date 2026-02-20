@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - "dev"     
+      - "dev"
   pull_request:
     branches:
       - "dev"
@@ -27,4 +27,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run pytest
+        env:
+          ACS_CONNECTION_STRING: ${{ secrets.ACS_CONNECTION_STRING }}
+          SENDER_ADDRESS: ${{ secrets.SENDER_ADDRESS }}
         run: pytest -q
