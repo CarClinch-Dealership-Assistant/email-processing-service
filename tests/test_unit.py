@@ -121,4 +121,4 @@ def test_send_email_uses_email_client_and_returns_string(mock_email_client_cls, 
     assert "CarClinch Email" in message["content"]["html"]
     # rn it is hardcoded as rongjunfeng09@gmail.com; 
     # we can uncomment when we actually email to the lead's email
-    # assert message["recipients"]["to"][0]["address"] == sample_input_data["lead"]["email"]
+    assert message["recipients"]["to"][0]["address"] == sample_input_data["lead"]["email"]
