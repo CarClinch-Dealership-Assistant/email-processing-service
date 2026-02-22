@@ -96,10 +96,10 @@ def send_email(inputData: dict):
         "recipients": {
             "to": [
                 {
-                    # "address": inputData["lead"]["email"],
-                    # "displayName": "{} {}".format(inputData["lead"]["fname"], inputData["lead"]["lname"])
-                    "address": "carclinch-dev@outlook.com",
-                    "displayName": "CarClinch Dev"
+                    "address": inputData["lead"]["email"],
+                    "displayName": "{} {}".format(inputData["lead"]["fname"], inputData["lead"]["lname"])
+                    # "address": "carclinch-dev@outlook.com",
+                    # "displayName": "CarClinch Dev"
                 }
             ]
         }
