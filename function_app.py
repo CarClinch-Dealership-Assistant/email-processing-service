@@ -5,6 +5,9 @@ import json
 import os
 from dotenv import load_dotenv
 from azure.communication.email import EmailClient
+from azure.cosmos import CosmosClient
+from datetime import datetime, timezone
+import uuid
 
 from mail_template import build_email_template
 
@@ -12,6 +15,15 @@ load_dotenv()
 
 
 myApp = df.DFApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+# initiate and access messages container from Cosmos DB
+def get_cosmos_container():
+    client = CosmosClient.from_connection_string(
+        os.getenv("COSMOS_CONNECTION_STRING"),
+        connection_verify=False
+    )
+    db = client.get_database_client(os.getenv("COSMOS_DB_NAME"))
+    return db.get_container_client("messages")
 
 def build_email_body(data: dict):
     lead = data["lead"]
@@ -74,9 +86,21 @@ def orchestrator_function(context):
 
     logging.info(f"Orchestrator started for: {input_data}")
 
+    # ret is now the response id and email body
     ret = yield context.call_activity("send_email", input_data)
 
-    return ret
+    messages_data = {
+        **input_data,
+        'acsEmailId': ret["acsEmailId"],
+        "emailBody": ret["emailBody"]
+    }
+    
+    # store the message in Cosmos DB
+    message_id = yield context.call_activity("store_message", messages_data)
+    
+    logging.info(f"Message stored with id: {message_id}")
+    
+    return message_id
 
 
 @myApp.activity_trigger(input_name="inputData")
@@ -87,10 +111,17 @@ def send_email(inputData: dict):
 
     body = build_email_body(inputData)
 
+    # if inputData has headers, its an inbound reply so grab In-Reply-To from it
+    # if not, it's a form submission; no threading needed bc we are starting it
+    in_reply_to = inputData.get("headers", {}).get("In-Reply-To")
+
     message = {
         "senderAddress": os.getenv("SENDER_ADDRESS"),
         "content": {
-            "subject": "This is the subject",
+            "subject": "Re. Inquiry about {} {} {}".format(
+                inputData["vehicle"]["year"],
+                inputData["vehicle"]["make"],
+                inputData["vehicle"]["model"]),
             "html": body
         },
         "recipients": {
@@ -102,10 +133,33 @@ def send_email(inputData: dict):
                     # "displayName": "CarClinch Dev"
                 }
             ]
-        }
+        },
+        **({"headers": {"In-Reply-To": in_reply_to}} if in_reply_to else {})
     }
 
     poller = email_client.begin_send(message)
-    poller.result()
+    result = poller.result()
+    
+    # result is the response body which we get "id" from
+    acs_email_id = result.get("id")
+    logging.info(f"Email sent, ACS ID: {acs_email_id}")
+    return {"acsEmailId": acs_email_id, "emailBody": body}
 
-    return "Email sent"
+# activity: store the sent message in Cosmos DB messages container
+@myApp.activity_trigger(input_name="inputData")
+def store_message(inputData: dict):
+    container = get_cosmos_container()
+    
+    message_doc = {
+        "id": f"msg_{uuid.uuid4().hex[:10]}",
+        "conversationId": inputData["conversationId"],
+        "body": inputData.get("emailBody", ""),
+        "source": 0,
+        "acsEmailId": inputData["acsEmailId"],
+        "inReplyTo": inputData.get("headers", {}).get("In-Reply-To"),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    container.create_item(body=message_doc)
+    logging.info(f"Stored message: {message_doc['id']}")
+    return message_doc["id"]
