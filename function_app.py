@@ -8,6 +8,7 @@ from azure.communication.email import EmailClient
 from azure.cosmos import CosmosClient
 from datetime import datetime, timezone
 import uuid
+from bs4 import BeautifulSoup
 
 from mail_template import build_email_template
 
@@ -24,6 +25,14 @@ def get_cosmos_container():
     )
     db = client.get_database_client(os.getenv("COSMOS_DB_NAME"))
     return db.get_container_client("messages")
+
+# utl to strip html tags for storing clean text in Cosmos DB
+def strip_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    # remove style and script tags entirely
+    for tag in soup(["style", "script"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ").split())
 
 def build_email_body(data: dict):
     lead = data["lead"]
@@ -153,7 +162,7 @@ def store_message(inputData: dict):
     message_doc = {
         "id": f"msg_{uuid.uuid4().hex[:10]}",
         "conversationId": inputData["conversationId"],
-        "body": inputData.get("emailBody", ""),
+        "body": strip_html(inputData.get("emailBody", "")),
         "source": 0,
         "acsEmailId": inputData["acsEmailId"],
         "inReplyTo": inputData.get("headers", {}).get("In-Reply-To"),
