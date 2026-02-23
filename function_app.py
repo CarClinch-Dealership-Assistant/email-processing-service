@@ -100,7 +100,7 @@ def orchestrator_function(context):
 
     messages_data = {
         **input_data,
-        'acsEmailId': ret["acsEmailId"],
+        'acsOperationId': ret["acsOperationId"],
         "messageId": ret["messageId"],
         "emailBody": ret["emailBody"]
     }
@@ -156,9 +156,9 @@ def send_email(inputData: dict):
     result = poller.result()
     
     # result is the response body which we get "id" from
-    acs_email_id = result.get("id")
-    logging.info(f"Email sent, ACS ID: {acs_email_id}")
-    return {"acsEmailId": acs_email_id, "emailBody": body, "messageId": message_id}
+    acs_operation_id = result.get("id")
+    logging.info(f"Email sent, ACS ID: {acs_operation_id}")
+    return {"acsOperationId": acs_operation_id, "emailBody": body, "messageId": message_id}
 
 # activity: store the sent message in Cosmos DB messages container
 @myApp.activity_trigger(input_name="inputData")
@@ -170,6 +170,7 @@ def store_message(inputData: dict):
         "conversationId": inputData["conversationId"],
         "body": strip_html(inputData.get("emailBody", "")),
         "source": 0,
+        "acsOperationId": inputData["acsOperationId"],  # for tracking status in ACS
         "acsMessageId": inputData["messageId"],       # this email's Message-ID, for inbound to match against
         "acsInReplyTo": inputData.get("headers", {}).get("Message-ID"),  # inbound's Message-ID, null for first outbound
         "timestamp": datetime.now(timezone.utc).isoformat()

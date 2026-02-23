@@ -27,6 +27,8 @@ jobs:
         env:
           ACS_CONNECTION_STRING: ${{ secrets.ACS_CONNECTION_STRING }}
           SENDER_ADDRESS: ${{ secrets.SENDER_ADDRESS }}
+          COSMOS_CONNECTION_STRING: ${{ secrets.COSMOS_CONNECTION_STRING }}
+          COSMOS_DB_NAME: ${{ vars.COSMOS_DB_NAME }}
         run: pytest -q
 
   build:
