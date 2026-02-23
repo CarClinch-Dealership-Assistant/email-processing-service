@@ -95,12 +95,13 @@ def orchestrator_function(context):
 
     logging.info(f"Orchestrator started for: {input_data}")
 
-    # ret is now the response id and email body
+    # ret is now the response id, email body, and message id
     ret = yield context.call_activity("send_email", input_data)
 
     messages_data = {
         **input_data,
         'acsEmailId': ret["acsEmailId"],
+        "messageId": ret["messageId"],
         "emailBody": ret["emailBody"]
     }
     
@@ -120,6 +121,8 @@ def send_email(inputData: dict):
 
     body = build_email_body(inputData)
 
+    # generate our own Message-ID so we can store and match against inbound In-Reply-To later
+    message_id = f"<{uuid.uuid4().hex}@carclinch.com>"
     # if inputData has headers, its an inbound reply so grab In-Reply-To from it
     # if not, it's a form submission; no threading needed bc we are starting it
     in_reply_to = inputData.get("headers", {}).get("Message-ID")
@@ -143,7 +146,10 @@ def send_email(inputData: dict):
                 }
             ]
         },
-        **({"headers": {"In-Reply-To": in_reply_to}} if in_reply_to else {})
+        "headers": {
+            "Message-ID": message_id,
+            **({"In-Reply-To": in_reply_to} if in_reply_to else {})
+        }
     }
 
     poller = email_client.begin_send(message)
@@ -152,7 +158,7 @@ def send_email(inputData: dict):
     # result is the response body which we get "id" from
     acs_email_id = result.get("id")
     logging.info(f"Email sent, ACS ID: {acs_email_id}")
-    return {"acsEmailId": acs_email_id, "emailBody": body}
+    return {"acsEmailId": acs_email_id, "emailBody": body, "messageId": message_id}
 
 # activity: store the sent message in Cosmos DB messages container
 @myApp.activity_trigger(input_name="inputData")
@@ -164,8 +170,8 @@ def store_message(inputData: dict):
         "conversationId": inputData["conversationId"],
         "body": strip_html(inputData.get("emailBody", "")),
         "source": 0,
-        "acsEmailId": inputData["acsEmailId"],
-        "inReplyTo": inputData.get("headers", {}).get("Message-ID"),
+        "acsMessageId": inputData["messageId"],       # this email's Message-ID, for inbound to match against
+        "acsInReplyTo": inputData.get("headers", {}).get("Message-ID"),  # inbound's Message-ID, null for first outbound
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
