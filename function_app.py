@@ -122,7 +122,7 @@ def send_email(inputData: dict):
 
     # if inputData has headers, its an inbound reply so grab In-Reply-To from it
     # if not, it's a form submission; no threading needed bc we are starting it
-    in_reply_to = inputData.get("headers", {}).get("In-Reply-To")
+    in_reply_to = inputData.get("headers", {}).get("Message-ID")
 
     message = {
         "senderAddress": os.getenv("SENDER_ADDRESS"),
@@ -165,7 +165,7 @@ def store_message(inputData: dict):
         "body": strip_html(inputData.get("emailBody", "")),
         "source": 0,
         "acsEmailId": inputData["acsEmailId"],
-        "inReplyTo": inputData.get("headers", {}).get("In-Reply-To"),
+        "inReplyTo": inputData.get("headers", {}).get("Message-ID"),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
