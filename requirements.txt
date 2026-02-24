@@ -4,6 +4,8 @@ azure-data-tables
 Pillow
 azure-communication-email
 dotenv
+azure-cosmos
+bs4
 
 # for testing
 pytest

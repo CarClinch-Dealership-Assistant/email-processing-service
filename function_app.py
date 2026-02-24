@@ -5,6 +5,10 @@ import json
 import os
 from dotenv import load_dotenv
 from azure.communication.email import EmailClient
+from azure.cosmos import CosmosClient
+from datetime import datetime, timezone
+import uuid
+from bs4 import BeautifulSoup
 
 from mail_template import build_email_template
 
@@ -12,6 +16,23 @@ load_dotenv()
 
 
 myApp = df.DFApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+# initiate and access messages container from Cosmos DB
+def get_cosmos_container():
+    client = CosmosClient.from_connection_string(
+        os.getenv("COSMOS_CONNECTION_STRING"),
+        connection_verify=False
+    )
+    db = client.get_database_client(os.getenv("COSMOS_DB_NAME"))
+    return db.get_container_client("messages")
+
+# utl to strip html tags for storing clean text in Cosmos DB
+def strip_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    # remove style and script tags entirely
+    for tag in soup(["style", "script"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ").split())
 
 def build_email_body(data: dict):
     lead = data["lead"]
@@ -74,9 +95,22 @@ def orchestrator_function(context):
 
     logging.info(f"Orchestrator started for: {input_data}")
 
+    # ret is now the response id, email body, and message id
     ret = yield context.call_activity("send_email", input_data)
 
-    return ret
+    messages_data = {
+        **input_data,
+        'acsOperationId': ret["acsOperationId"],
+        "messageId": ret["messageId"],
+        "emailBody": ret["emailBody"]
+    }
+    
+    # store the message in Cosmos DB
+    message_id = yield context.call_activity("store_message", messages_data)
+    
+    logging.info(f"Message stored with id: {message_id}")
+    
+    return message_id
 
 
 @myApp.activity_trigger(input_name="inputData")
@@ -87,10 +121,19 @@ def send_email(inputData: dict):
 
     body = build_email_body(inputData)
 
+    # generate our own Message-ID so we can store and match against inbound In-Reply-To later
+    message_id = f"<{uuid.uuid4().hex}@carclinch.com>"
+    # if inputData has headers, its an inbound reply so grab In-Reply-To from it
+    # if not, it's a form submission; no threading needed bc we are starting it
+    in_reply_to = inputData.get("headers", {}).get("Message-ID")
+
     message = {
         "senderAddress": os.getenv("SENDER_ADDRESS"),
         "content": {
-            "subject": "This is the subject",
+            "subject": "Re. Inquiry about {} {} {}".format(
+                inputData["vehicle"]["year"],
+                inputData["vehicle"]["make"],
+                inputData["vehicle"]["model"]),
             "html": body
         },
         "recipients": {
@@ -102,10 +145,37 @@ def send_email(inputData: dict):
                     # "displayName": "CarClinch Dev"
                 }
             ]
+        },
+        "headers": {
+            "Message-ID": message_id,
+            **({"In-Reply-To": in_reply_to} if in_reply_to else {})
         }
     }
 
     poller = email_client.begin_send(message)
-    poller.result()
+    result = poller.result()
+    
+    # result is the response body which we get "id" from
+    acs_operation_id = result.get("id")
+    logging.info(f"Email sent, ACS ID: {acs_operation_id}")
+    return {"acsOperationId": acs_operation_id, "emailBody": body, "messageId": message_id}
 
-    return "Email sent"
+# activity: store the sent message in Cosmos DB messages container
+@myApp.activity_trigger(input_name="inputData")
+def store_message(inputData: dict):
+    container = get_cosmos_container()
+    
+    message_doc = {
+        "id": f"msg_{uuid.uuid4().hex[:10]}",
+        "conversationId": inputData["conversationId"],
+        "body": strip_html(inputData.get("emailBody", "")),
+        "source": 0,
+        "acsOperationId": inputData["acsOperationId"],  # for tracking status in ACS
+        "acsMessageId": inputData["messageId"],       # this email's Message-ID, for inbound to match against
+        "acsInReplyTo": inputData.get("headers", {}).get("Message-ID"),  # inbound's Message-ID, null for first outbound
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    container.create_item(body=message_doc)
+    logging.info(f"Stored message: {message_doc['id']}")
+    return message_doc["id"]
