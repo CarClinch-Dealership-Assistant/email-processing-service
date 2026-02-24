@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 import pytest
-from function_app import orchestrator_function, sb_trigger
+from function_app import orchestrator_function, sb_trigger, store_message
 
 """ 
 COMPONENT TESTS:
@@ -61,7 +61,15 @@ def sample_input_data():
             "province": "ON",
             "postal_code": "K1A0B1",
         },
+        "conversationId": "conv_test123"
     }
+
+# mock send_email return value matching the current dict shape
+MOCK_SEND_EMAIL_RESULT = {
+    "acsOperationId": "acs-operation-id-123",
+    "emailBody": "<html>test body</html>",
+    "messageId": "<testmessageid@carclinch.com>"
+}
 
 # simulate Service Bus messages
 class FakeServiceBusMessage:
@@ -84,10 +92,12 @@ class FakeDFOrchestration:
         # record call and return a fake result
         self.called_activities.append((name, input_data))
         # in real durable functions this is yielded; here just simulate
-        return "Email sent"
+        return MOCK_SEND_EMAIL_RESULT
+
+# sb_trigger test
 
 @pytest.mark.asyncio
-# first test: verify that the Service Bus trigger starts the orchestrator w correct input
+# verify that the Service Bus trigger starts the orchestrator w correct input
 async def test_sb_trigger_starts_orchestration(sample_input_data):
     # arrange the fake Service Bus message and mock DurableOrchestrationClient
     msg = FakeServiceBusMessage(sample_input_data)
@@ -111,55 +121,166 @@ async def test_sb_trigger_starts_orchestration(sample_input_data):
     assert args[0] == "orchestrator_function"
     assert kwargs["client_input"] == sample_input_data
 
-# second test: verify that the orchestrator calls the send_email activity w correct input
-def test_orchestrator_function_calls_send_email(sample_input_data):
-    # arrange a fake orchestration w the sample input data
+# orchestrator_function tests
+
+# helper to drive the orchestrator generator through both yields, 
+# simulating the activity calls and their results
+def _run_orchestrator(ctx, send_result, store_result="msg_abc123"):
+    """helper to drive the orchestrator generator through both yields"""
+    real_orchestrator = get_user_fn(orchestrator_function)
+    gen = real_orchestrator(ctx)
+    next(gen)
+    try:
+        gen.send(send_result)
+    except StopIteration:
+        return
+    try:
+        gen.send(store_result)
+    except StopIteration:
+        return
+
+# verify that the orchestrator calls the send_email activity 
+# as the first activity and passes the original input data to it
+def test_orchestrator_calls_send_email_first(sample_input_data):
     ctx = FakeDFOrchestration(sample_input_data)
 
-    # patch the call_activity method to sim calling the send_email activity and returning a result
     def _call_activity(name, input_data):
         ctx.called_activities.append((name, input_data))
-        return "Email sent"
+        return MOCK_SEND_EMAIL_RESULT
 
     ctx.call_activity = _call_activity
+    _run_orchestrator(ctx, MOCK_SEND_EMAIL_RESULT)
 
-    # act by running the orchestrator function w the fake context; since it's a generator, we need to simulate the yields
-    real_orchestrator = get_user_fn(orchestrator_function)
-    gen = real_orchestrator(ctx)
-
-    # in Durable Functions, orchestrator is a generator; we simulate the yields for call_activity
-    result = next(gen)  
-    # sim the activity function returning "Email sent"
-    try:
-        final = gen.send("Email sent")
-    except StopIteration as e:
-        final = e.value
-
-    # assert that the orchestrator called the send_email activity w the correct input data 
-    # and that the final result is "Email sent"
     assert ctx.called_activities[0][0] == "send_email"
     assert ctx.called_activities[0][1] == sample_input_data
-    assert final == "Email sent"
 
-@patch("function_app.send_email")
-# this test combines orchestrator & activity; like mini e2e test
-def test_orchestrator_and_activity_integration(mock_send_email, sample_input_data):
-    mock_send_email.return_value = "Email sent"
-
+# verify that the orchestrator calls the store_message activity as 
+# the second activity
+def test_orchestrator_calls_store_message_second(sample_input_data):
     ctx = FakeDFOrchestration(sample_input_data)
 
     def _call_activity(name, input_data):
-        return mock_send_email(input_data)
+        ctx.called_activities.append((name, input_data))
+        return MOCK_SEND_EMAIL_RESULT
 
     ctx.call_activity = _call_activity
+    _run_orchestrator(ctx, MOCK_SEND_EMAIL_RESULT)
 
-    real_orchestrator = get_user_fn(orchestrator_function)
-    gen = real_orchestrator(ctx)
-    _ = next(gen)
-    try:
-        final = gen.send("Email sent")
-    except StopIteration as e:
-        final = e.value
+    assert ctx.called_activities[1][0] == "store_message"
+
+# verify that the orchestrator passes the acsOperationId, messageId, and emailBody
+# from the send_email result into the input of store_message
+def test_orchestrator_passes_acs_fields_to_store_message(sample_input_data):
+    """orchestrator should pass acsOperationId, messageId, emailBody from send_email into store_message input"""
+    ctx = FakeDFOrchestration(sample_input_data)
+
+    def _call_activity(name, input_data):
+        ctx.called_activities.append((name, input_data))
+        return MOCK_SEND_EMAIL_RESULT
+
+    ctx.call_activity = _call_activity
+    _run_orchestrator(ctx, MOCK_SEND_EMAIL_RESULT)
+
+    store_input = ctx.called_activities[1][1]
+    assert store_input["acsOperationId"] == MOCK_SEND_EMAIL_RESULT["acsOperationId"]
+    assert store_input["messageId"] == MOCK_SEND_EMAIL_RESULT["messageId"]
+    assert store_input["emailBody"] == MOCK_SEND_EMAIL_RESULT["emailBody"]
+
+# verify that the store_message input includes the original input_data fields (lead, vehicle, etc.) 
+# in addition to the ACS fields
+def test_orchestrator_store_message_input_includes_original_data(sample_input_data):
+    """store_message input should include the original input_data fields (lead, vehicle, etc.)"""
+    ctx = FakeDFOrchestration(sample_input_data)
+
+    def _call_activity(name, input_data):
+        ctx.called_activities.append((name, input_data))
+        return MOCK_SEND_EMAIL_RESULT
+
+    ctx.call_activity = _call_activity
+    _run_orchestrator(ctx, MOCK_SEND_EMAIL_RESULT)
+
+    store_input = ctx.called_activities[1][1]
+    assert "lead" in store_input
+    assert "vehicle" in store_input
+    assert "dealership" in store_input
+    assert store_input["conversationId"] == "conv_test123"
+
+# send_email activity tests
+
+@patch("function_app.send_email")
+# this test verifies that the orchestrator calls the send_email activity w 
+# the correct input data
+def test_orchestrator_and_activity_integration(mock_send_email, sample_input_data):
+    mock_send_email.return_value = MOCK_SEND_EMAIL_RESULT
+
+    ctx = FakeDFOrchestration(sample_input_data)
+    activities_called = []
+
+    def _call_activity(name, input_data):
+        activities_called.append((name, input_data))
+        if name == "send_email":
+            return mock_send_email(input_data)
+        return "msg_abc123"
+
+    ctx.call_activity = _call_activity
+    _run_orchestrator(ctx, MOCK_SEND_EMAIL_RESULT)
 
     mock_send_email.assert_called_once_with(sample_input_data)
-    assert final == "Email sent"
+    assert activities_called[0][0] == "send_email"
+    assert activities_called[1][0] == "store_message"
+
+# store_message activity tests
+
+@patch("function_app.get_cosmos_container")
+# this test verifies that the store_message function creates a Cosmos DB item with all the expected fields
+# assembled by orchestrator
+def test_store_message_receives_correct_data_from_orchestrator(mock_get_container, sample_input_data):
+    """store_message should correctly handle the data assembled by the orchestrator"""
+    mock_container = MagicMock()
+    mock_get_container.return_value = mock_container
+
+    # simulate what the orchestrator assembles and passes to store_message
+    store_input = {
+        **sample_input_data,
+        "acsOperationId": MOCK_SEND_EMAIL_RESULT["acsOperationId"],
+        "messageId": MOCK_SEND_EMAIL_RESULT["messageId"],
+        "emailBody": MOCK_SEND_EMAIL_RESULT["emailBody"]
+    }
+
+    result = store_message(store_input)
+
+    mock_container.create_item.assert_called_once()
+    assert result.startswith("msg_")
+
+    args, _ = mock_container.create_item.call_args
+    doc = args[0] if args else mock_container.create_item.call_args.kwargs["body"]
+
+    assert doc["conversationId"] == "conv_test123"
+    assert doc["acsMessageId"] == MOCK_SEND_EMAIL_RESULT["messageId"]
+    assert doc["acsInReplyTo"] is None  # first outbound, no headers
+    assert doc["source"] == 0
+
+
+@patch("function_app.get_cosmos_container")
+# this test checks that when store_message is called with inputData that contains headers with a Message-ID
+# (indicating an inbound reply), the acsInReplyTo field in the stored Cosmos
+def test_store_message_handles_inbound_reply_from_orchestrator(mock_get_container, sample_input_data):
+    mock_container = MagicMock()
+    mock_get_container.return_value = mock_container
+
+    # simulate inbound reply flow — inputData would have headers from the inbound email
+    store_input = {
+        **sample_input_data,
+        "headers": {"Message-ID": "<previous-outbound@carclinch.com>"},
+        "acsOperationId": MOCK_SEND_EMAIL_RESULT["acsOperationId"],
+        "messageId": MOCK_SEND_EMAIL_RESULT["messageId"],
+        "emailBody": MOCK_SEND_EMAIL_RESULT["emailBody"]
+    }
+
+    store_message(store_input)
+
+    args, _ = mock_container.create_item.call_args
+    doc = args[0] if args else mock_container.create_item.call_args.kwargs["body"]
+
+    assert doc["acsInReplyTo"] == "<previous-outbound@carclinch.com>"
+    assert doc["acsMessageId"] == MOCK_SEND_EMAIL_RESULT["messageId"]
