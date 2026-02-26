@@ -164,7 +164,7 @@ def send_email(inputData: dict):
 @myApp.activity_trigger(input_name="inputData")
 def store_message(inputData: dict):
     container = get_cosmos_container()
-    
+
     message_doc = {
         "id": f"msg_{uuid.uuid4().hex[:10]}",
         "conversationId": inputData["conversationId"],
@@ -179,3 +179,12 @@ def store_message(inputData: dict):
     container.create_item(body=message_doc)
     logging.info(f"Stored message: {message_doc['id']}")
     return message_doc["id"]
+
+
+
+@myApp.route(route="emails/replying")
+def reply_email(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info("Get results endpoint called")
+    req_body = req.get_json()
+    logging.info(f"Request body: {req_body}")
+    return func.HttpResponse(json.dumps({"data":"test"}), mimetype="application/json")
