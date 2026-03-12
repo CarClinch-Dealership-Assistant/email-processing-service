@@ -1,11 +1,12 @@
+import os
 import uuid
 import logging
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from app.database.cosmos import CosmosDBClient
 from app.email.factory import EmailFactory
-from .gpt import GPTClient
-from .template import build_email_template
+from app.assistant.gpt import GPTClient
+from app.assistant.template import build_email_template
 
 system_prompt = """
 # Prompt: Automotive Lead Engagement Generator
@@ -30,7 +31,7 @@ Generate a **Follow-up Email** for a lead interested in a specific vehicle. The 
 
 class Assistant(GPTClient):
     def __init__(self):
-        GPTClient.__init__(self)
+        super().__init__()
 
     def store_message(self, data: dict):
         message_doc = {
@@ -49,6 +50,26 @@ class Assistant(GPTClient):
         logging.info(f"Stored message: {message_doc['id']}")
         return message_doc["id"]
 
+    def save_received_message(self, data: dict):
+        message_doc = {
+            "id": f"msg_{uuid.uuid4().hex[:10]}",
+            "conversationId": data.get("conversationId", ""),
+            "body": data.get("body", ""),
+            "customer": data.get("sender", ""),
+            "source": data.get("source", ""),
+            "messageID": data.get("message_id", ""),  # this email's Message-ID, for inbound to match against
+            "inReplyTo": data.get("Message-ID", ""),
+            "role": data.get("role", "user"),
+            "subject": data.get("subject", ""),
+            # inbound's Message-ID, null for first outbound
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        CosmosDBClient().save_message_to_default_container(message_doc)
+        logging.info(f"Stored message: {message_doc['id']}")
+        return message_doc["id"]
+
+
+
     def _get_default_message(self):
         message = []
         system = {
@@ -59,7 +80,7 @@ class Assistant(GPTClient):
         message.append(system)
         return message
 
-    def _build_email_content(self, customer, content):
+    def _build_email_content(self, customer, subject, content):
         lead = customer["lead"]
         vehicle = customer["vehicle"]
         dealership = customer["dealership"]
@@ -80,9 +101,9 @@ class Assistant(GPTClient):
             "dealership_province": dealership["province"],
             "dealership_postal_code": dealership["postal_code"],
         }
-        return build_email_template(content.format(**data))
+        return subject.format(**data), build_email_template(content.format(**data))
 
-    def _strip_html(html: str) -> str:
+    def _strip_html(self, html: str) -> str:
         soup = BeautifulSoup(html, "html.parser")
         # remove style and script tags entirely
         for tag in soup(["style", "script"]):
@@ -91,25 +112,27 @@ class Assistant(GPTClient):
 
     def contact(self, customer: dict):
         # generate content with AI
-        user_prompt = """Please generate the email content.
+        user_prompt = """Please generate the email content. 
+Please do not include labels like 'Subject:', 'Salutation:', 'Body:', or 'Closing:' in the response. These were only intended as prompts to indicate what each section should contain.
 Expected Output Structure:
 ```
-Subject: Update regarding your inquiry: {vehicle_year} {vehicle_make} {vehicle_model}
-Salutation: Dear {customer_name},
-Body: Thank you for contacting us at our {dealership_city} location... [Incorporate vehicle details here] ...
-Closing: Best regards,
+[Subject:] Update regarding your inquiry: {vehicle_year} {vehicle_make} {vehicle_model}
+[Salutation:] Dear {customer_name},
+[Body:] Thank you for contacting us at our {dealership_city} location... [Incorporate vehicle details here] ...
+[Closing:] Best regards,
 The Sales Team at {dealership_city}
 Contact Info Block:
 {dealership_phone} | {dealership_email}
 {dealership_address}
 {dealership_city}, {dealership_province} {dealership_postal_code}
-```"""
+```
+"""
         prompts = self._get_default_message()
         prompts.append({"role": "user", "content": user_prompt})
         resp = self.chat(prompts)
         # build email content
         subject, body = self._process_response(resp["choices"][0]["message"]["content"])
-        email_content = self._build_email_content(customer, body)
+        subject, email_content = self._build_email_content(customer, subject, body)
         # call send
         to = customer["lead"]["email"]
         EmailFactory.get_provider("gmail").send(to, subject, email_content)
@@ -127,8 +150,6 @@ Contact Info Block:
     def _process_response(self, text):
         parts = text.split('\n', 1)
         subject = parts[0]
-        if subject.startswith("Subject:"):
-            subject = parts[0].split(":", 1)[1].strip()
         body = parts[1] if len(parts) > 1 else ""
         body = body.replace("\r\n", "<br />").replace("\n", "<br />")
         return (subject, body)
@@ -162,6 +183,7 @@ Contact Info Block:
         self.store_message(msg)
 
     def reply(self, received_email):
+        self.save_received_message(received_email)
         prompts = self._get_default_message()
         # fetch history
         history = self._get_email_history(received_email["sender"])
@@ -180,7 +202,7 @@ Contact Info Block:
         msg = {
             "customer": received_email["sender"],
             "conversationId": "",
-            "body": email_content,
+            "body": body.replace("<br />", "\n"),
             "messageId": "",
             "Message-ID": received_email["message_id"],
             "role": "assistant"

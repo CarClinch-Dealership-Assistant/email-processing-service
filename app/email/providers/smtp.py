@@ -38,52 +38,52 @@ class SmtpProvider:
     """Use IMAP to poll the latest unread emails"""
     def fetch_latest(self) -> List[StandardEmail]:
         standard_emails = []
-        print(self.user, self.imap_host, self)
-        # try:
         mail = imaplib.IMAP4_SSL(self.imap_host)
-        mail.login(self.user, self.password)
-        mail.select("inbox")
+        try:
+            mail.login(self.user, self.password)
+            mail.select("inbox")
+            # Search all unread (UNSEEN) emails
+            status, messages = mail.search(None, "UNSEEN")
+            if status != "OK":
+                return []
 
-        # Search all unread (UNSEEN) emails
-        status, messages = mail.search(None, "UNSEEN")
-        if status != "OK":
-            return []
+            # Get the mailing list ID
+            mail_ids = messages[0].split()
 
-        # Get the mailing list ID
-        mail_ids = messages[0].split()
+            for m_id in mail_ids:
+                # Get the specific content of the email
+                res, msg_data = mail.fetch(m_id, "(RFC822)")
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        # Parse the mail byte stream
+                        raw_email = email.message_from_bytes(response_part[1])
 
-        for m_id in mail_ids:
-            # Get the specific content of the email
-            res, msg_data = mail.fetch(m_id, "(RFC822)")
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    # Parse the mail byte stream
-                    raw_email = email.message_from_bytes(response_part[1])
+                        # Parse the subject
+                        msg_id = raw_email.get("Message-ID", "")
+                        subject = raw_email["Subject"]
 
-                    # Parse the subject
-                    msg_id = raw_email.get("Message-ID", "")
-                    subject = raw_email["Subject"]
+                        # Parse the sender
+                        sender = raw_email.get("From")
 
-                    # Parse the sender
-                    sender = raw_email.get("From")
+                        # Parse the text (simple processing)
+                        body = self.parse_mail_body(raw_email)
 
-                    # Parse the text (simple processing)
-                    body = self.parse_mail_body(raw_email)
+                        # Convert to a general model
+                        standard_emails.append(StandardEmail(
+                            id=m_id.decode(),
+                            message_id=str(msg_id),
+                            sender=sender,
+                            subject=subject,
+                            body=body,
+                            source="smtp"
+                        ))
 
-                    # Convert to a general model
-                    standard_emails.append(StandardEmail(
-                        id=m_id.decode(),
-                        message_id=str(msg_id),
-                        sender=sender,
-                        subject=subject,
-                        body=body,
-                        source="smtp"
-                    ))
 
-        mail.close()
-        mail.logout()
-        # except Exception as e:
-        #     print(f"IMAP Fetch Error: {e}")
+        except Exception as e:
+            print(f"IMAP Fetch Error: {e}")
+        finally:
+            mail.close()
+            mail.logout()
 
         return standard_emails
 

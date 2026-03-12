@@ -1,6 +1,6 @@
+import logging
 import os
-from openai import OpenAI
-from azure.cosmos import CosmosClient
+from azure.cosmos import CosmosClient, exceptions
 
 class CosmosDBClient:
     def __init__(self):
@@ -12,14 +12,14 @@ class CosmosDBClient:
     def _init_client(self):
         self.client = CosmosClient.from_connection_string(
             self.connection_string,
-            connection_verify=False
+            connection_verify=True
         )
 
     def _get_database_client(self, db_name: str):
         return self.client.get_database_client(db_name)
 
     def get_container_client(self, db_name: str, container_name: str):
-        self._get_database_client(db_name).get_container_client(container_name)
+        return self._get_database_client(db_name).get_container_client(container_name)
 
     def get_default_container_client(self):
         return self.get_container_client(self.database, self.container)
@@ -29,6 +29,14 @@ class CosmosDBClient:
         return msg
 
     def query_items_from_default_container(self, query: str, params: list[dict[str, str]]):
-        return self.get_default_container_client().query_item(query=query, params=params, enable_cross_partition_query=True)
-
+        try:
+            items = self.get_default_container_client().query_items(
+                query=query,
+                parameters=params,
+                enable_cross_partition_query=True
+            )
+            return [item for item in items]
+        except exceptions.CosmosHttpResponseError as e:
+            logging.error(f"Query failed: {e.message}")
+            return []
 

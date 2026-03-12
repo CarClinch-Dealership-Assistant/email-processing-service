@@ -4,7 +4,7 @@ from openai import OpenAI
 
 class GPTClient():
     def __init__(self):
-        self.model="gpt-4.1"
+        self.model= os.getenv("OPENAI_MODEL_NAME")
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.base_url = os.getenv("OPENAI_BASE_URL")
         self.init_client()
