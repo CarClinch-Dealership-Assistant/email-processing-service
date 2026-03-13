@@ -12,20 +12,21 @@ class CosmosDBClient:
         self._init_client()
 
     def _init_client(self):
-        connection_string = os.getenv("COSMOS_CONNECTION_STRING")
-
-        if connection_string:
-            self.client = CosmosClient.from_connection_string(
-                connection_string,
-                connection_verify=True
-            )
-        else:
-            if not self.endpoint:
-                raise ValueError("Either COSMOS_CONNECTION_STRING or COSMOS_ENDPOINT must be set")
+        if self.endpoint:
             self.client = CosmosClient(
                 url=self.endpoint,
                 credential=DefaultAzureCredential()
             )
+            return
+
+        connection_string = os.getenv("COSMOS_CONNECTION_STRING")
+        if connection_string == "" or not connection_string:
+            raise ValueError("Either COSMOS_ENDPOINT or COSMOS_CONNECTION_STRING must be set")
+
+        self.client = CosmosClient.from_connection_string(
+            connection_string,
+            connection_verify=True
+        )
 
     def _get_database_client(self, db_name: str):
         return self.client.get_database_client(db_name)
