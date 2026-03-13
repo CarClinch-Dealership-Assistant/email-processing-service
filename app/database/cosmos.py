@@ -1,17 +1,30 @@
 import logging
 import os
 from azure.cosmos import CosmosClient, exceptions
+from azure.identity import DefaultAzureCredential
+
 
 class CosmosDBClient:
     def __init__(self):
-        self.connection_string = os.getenv("COSMOS_CONNECTION_STRING")
+        self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
         self.container = os.getenv("COSMOS_DB_CONTAINER")
         self._init_client()
 
     def _init_client(self):
+        if self.endpoint:
+            self.client = CosmosClient(
+                url=self.endpoint,
+                credential=DefaultAzureCredential()
+            )
+            return
+
+        connection_string = os.getenv("COSMOS_CONNECTION_STRING")
+        if connection_string == "" or not connection_string:
+            raise ValueError("Either COSMOS_ENDPOINT or COSMOS_CONNECTION_STRING must be set")
+
         self.client = CosmosClient.from_connection_string(
-            self.connection_string,
+            connection_string,
             connection_verify=True
         )
 
