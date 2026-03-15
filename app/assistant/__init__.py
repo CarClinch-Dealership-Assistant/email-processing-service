@@ -1,6 +1,7 @@
 import json
 import uuid
 import logging
+from email.utils import make_msgid
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from app.database.cosmos import CosmosDBClient
@@ -12,12 +13,16 @@ system_prompt = """
 # Prompt: Automotive Lead Engagement Generator
 
 ## 1. Role & Context
-You are an email assistant for a used car dealership. Your tone is friendly, professional, and helpful.
+You are an sales assistant for a used car dealership. Your tone is friendly, professional, and helpful.
+
+You should not talk about being an AI or mention any technology, including any common AI communication patterns.
+Always present yourself as a knowledgeable team member of the dealership.
+
 Your only permitted tasks are:
-- Answering questions about vehicles, pricing, availability, trade-ins, and financing options
+- Answering questions about vehicles, availability, trade-ins, sales process, and financing in a way that encourages the lead toward a showroom visit or purchase decision without being pushy or making financial promises
 - Scheduling, confirming, rescheduling, and cancelling appointments
 - Providing dealership information (hours, location, contact details)
-- Moving the lead toward a showroom visit or purchase decision
+- Moving the lead toward a showroom visit, test drive, or purchase decision
 
 You must never:
 - Answer questions unrelated to the dealership, its vehicles, or the sales process
@@ -67,6 +72,7 @@ class Assistant(GPTClient):
             "leadId": data.get("leadId", ""),
             "vehicleId": data.get("vehicleId", ""),
             "dealerId": data.get("dealerId", ""),
+            "responseId": data.get("responseId", ""),
             "emailMessageId": data.get("emailMessageId", ""),
             "role": data.get("role", ""),
             "body": data.get("body", ""),
@@ -84,6 +90,7 @@ class Assistant(GPTClient):
             "leadId": context.get("leadId", ""),
             "vehicleId": context.get("vehicleId", ""),
             "dealerId": context.get("dealerId", ""),
+            "responseId": data.get("responseId", ""),
             "emailMessageId": data.get("message_id", ""),
             "role": "user",
             "body": data.get("body", ""),
@@ -177,21 +184,25 @@ Contact Info Block:
         prompts = self._get_default_message()
         prompts.append({"role": "user", "content": user_prompt})
         resp = self.chat(prompts)
+        # store response_id in the message doc for chaining
+        response_id = resp.id
         # build email content
-        subject, body = self._process_response(resp["choices"][0]["message"]["content"])
+        subject, body = self._process_response(resp.output_text.strip())
         subject, email_content = self._build_email_content(customer, subject, body)
         # call send
+        msg_id = make_msgid()
         to = customer["lead"]["email"]
-        EmailFactory.get_provider("gmail").send(to, subject, email_content)
+        EmailFactory.get_provider("gmail").send(to, subject, email_content, msg_id=msg_id)
         # store to db
         msg = {
             "conversationId": customer["conversationId"],
             "leadId": customer["lead"]["id"],
             "vehicleId": customer["vehicle"]["id"],
             "dealerId": customer["dealership"]["id"],
-            "emailMessageId": "",
+            "responseId": response_id,
+            "emailMessageId": msg_id,
             "role": "assistant",
-            "body": self._strip_html(email_content),
+            "body": resp.output_text,
             "subject": subject
         }
         self.store_message(msg)
@@ -213,55 +224,90 @@ Contact Info Block:
             messages.append({"role": item["role"], "content": body})
         return messages
 
-    def reply(self, received_email: dict, context: dict):
+    def reply(self, received_email: dict):
+        previous_response_id = None
+        context = {}
+        in_reply_to = received_email.get("in_reply_to", "")
+        if in_reply_to:
+            msgs = CosmosDBClient().query_items_from_default_container(
+                "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'",
+                [{"name": "@msgId", "value": in_reply_to}]
+            )
+            if msgs:
+                previous_response_id = msgs[0].get("responseId")
+                context = {
+                    "conversationId": msgs[0].get("conversationId", ""),
+                    "leadId": msgs[0].get("leadId", ""),
+                    "vehicleId": msgs[0].get("vehicleId", ""),
+                    "dealerId": msgs[0].get("dealerId", ""),
+                }
+        # fallback to DB lookup if context not resolved from chain
+        if not context:
+            logging.warning(f"No chain found for in_reply_to: {in_reply_to}, falling back to DB lookup")
+            from email.utils import parseaddr
+            _, sender_email = parseaddr(received_email["sender"])
+            db = CosmosDBClient()
+            leads = db.query_items_from_container("leads",
+                "SELECT * FROM c WHERE c.email = @email",
+                [{"name": "@email", "value": sender_email.lower()}]
+            )
+            if not leads:
+                logging.warning(f"No lead found for sender: {sender_email}")
+                return
+            lead = leads[0]
+            conversations = db.query_items_from_container("conversations",
+                "SELECT * FROM c WHERE c.leadId = @leadId AND c.status = 1 ORDER BY c.timestamp DESC OFFSET 0 LIMIT 1",
+                [{"name": "@leadId", "value": lead["id"]}]
+            )
+            if not conversations:
+                logging.warning(f"No active conversation for lead: {lead['id']}")
+                return
+            conversation = conversations[0]
+            context = {
+                "conversationId": conversation["id"],
+                "leadId": lead["id"],
+                "vehicleId": conversation["vehicleId"],
+                "dealerId": conversation["dealerId"],
+            }
         self.save_received_message(received_email, context)
         prompts = self._get_default_message()
         # fetch history
-        history = self._get_email_history(context["conversationId"])
-        prompts.extend(history)
-        vehicle = context.get("vehicle")
-        dealership = context.get("dealership")
-        vehicle_context = f"""
-Vehicle on file:
-- Year/Make/Model/Trim: {vehicle["year"]} {vehicle["make"]} {vehicle["model"]} {vehicle["trim"]}
-- Status: {"new" if vehicle["status"] == 0 else "used"}
-- Mileage: {vehicle["mileage"]}
-- Transmission: {vehicle["transmission"]}
-- Additional notes: {vehicle["comments"]}
-- Dealership: {dealership["city"]} | {dealership["phone"]} | {dealership["email"]}
-"""
-        user_prompt = f"""Please generate the email content for replying. no variables need to be replaced.
-{vehicle_context}
-Use the vehicle details above when answering any questions about the vehicle. Do not invent specs not listed here."""
+        # history = self._get_email_history(context["conversationId"])
+        # prompts.extend(history)
+        user_prompt = f"""The customer just replied: "{received_email['body']}"
+Please generate the email content for replying based primarily on the inquiry there as well as the provided content through the response ID history chaining. no variables need to be replaced.
+Refer to the vehicle, lead, and dealership details in the first system message when answering any questions about the vehicle. Do not invent specs not previously mentioned. If the customer's message contains multiple questions, answer all of them in a single reply.
+Do not include any labels, brackets, or section markers such as [Subject:], [Salutation:], [Body:], [Closing:], or any similar tags anywhere in the output. Write it as a natural, flowing email."""
         prompts.append({"role": "user", "content": user_prompt})
         # generate content with AI
-        resp = self.chat(prompts)
-        raw_content = resp["choices"][0]["message"]["content"].strip()
+        resp = self.chat(prompts, previous_response_id=previous_response_id)
+        raw_content =  resp.output_text.strip().strip()
         try:
             parsed = json.loads(raw_content)
             if parsed.get("escalate") is True:
                 logging.warning(
-                    f"Reply skipped — out of scope. Reason: {parsed.get('reason')} | Sender: {received_email['sender']}"
+                    f"Reply skipped; out of scope. Reason: {parsed.get('reason')} | Sender: {received_email['sender']}"
                 )
                 return  # skip send and store
         except (json.JSONDecodeError, AttributeError):
             pass  # not a guardrail response, proceed normally
 
         # build email content
-
         subject, body = self._process_response(raw_content)
         email_content = build_email_template(body)
         # call reply
-        EmailFactory.get_provider("gmail").reply(received_email["sender"], received_email["message_id"], received_email["subject"], email_content)
+        msg_id = make_msgid()
+        EmailFactory.get_provider("gmail").reply(received_email["sender"], received_email["message_id"], received_email["subject"], email_content, msg_id=msg_id)
         # store to db
         msg ={
             "conversationId": context.get("conversationId", ""),
             "leadId": context.get("leadId", ""),
             "vehicleId": context.get("vehicleId", ""),
             "dealerId": context.get("dealerId", ""),
-            "emailMessageId": received_email.get("message_id", ""),
+            "responseId": resp.id,
+            "emailMessageId": msg_id,
             "role": "assistant",
-            "body": self._strip_html(email_content),
+            "body": resp.output_text,
             "subject": subject
         }
         self.store_message(msg)

@@ -17,13 +17,15 @@ class SmtpProvider:
         self.user = None
         self.password = None
 
-    def send(self, to: str, subject: str, body: str) -> bool:
+    def send(self, to: str, subject: str, body: str, msg_id: str = None) -> bool:
         """Sending with SMTP"""
         try:
             msg = MIMEText(body,"html", "utf-8")
             msg["Subject"] = subject
             msg["From"] = self.user
             msg["To"] = to
+            if msg_id:
+                msg["Message-ID"] = msg_id
 
             with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
                 server.starttls()
@@ -68,6 +70,8 @@ class SmtpProvider:
                         # Parse the text (simple processing)
                         body = self.parse_mail_body(raw_email)
 
+                        in_reply_to = raw_email.get("In-Reply-To", "")
+                        
                         # Convert to a general model
                         standard_emails.append(StandardEmail(
                             id=m_id.decode(),
@@ -75,7 +79,8 @@ class SmtpProvider:
                             sender=sender,
                             subject=subject,
                             body=body,
-                            source="smtp"
+                            source="smtp",
+                            in_reply_to=in_reply_to
                         ))
 
 
@@ -142,6 +147,7 @@ class SmtpProvider:
 
                 sender = raw_email.get("From")
                 msg_id = raw_email.get("Message-ID")
+                in_reply_to = raw_email.get("In-Reply-To", "")
 
 
                 return StandardEmail(
@@ -150,7 +156,8 @@ class SmtpProvider:
                     sender=sender,
                     subject=subject,
                     body=self.parse_mail_body(raw_email),
-                    source="smtp"
+                    source="smtp",
+                    in_reply_to=in_reply_to
                 )
         return None
 
@@ -193,7 +200,7 @@ class SmtpProvider:
 
         return results
 
-    def reply(self, sender: str, message_id: str, subject: str, body: str) -> bool:
+    def reply(self, sender: str, message_id: str, subject: str, body: str, msg_id: str = None) -> bool:
         """
         :param sender: email receiver
         :param message_id: original Message-ID
@@ -208,6 +215,8 @@ class SmtpProvider:
             msg["Subject"] = subject
             msg["From"] = self.user
             msg["To"] = sender
+            if msg_id:
+                msg["Message-ID"] = msg_id
 
             if message_id:
                 if not message_id.startswith("<"):
