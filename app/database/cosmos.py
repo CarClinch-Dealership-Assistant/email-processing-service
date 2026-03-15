@@ -8,7 +8,7 @@ class CosmosDBClient:
     def __init__(self):
         self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
-        self.container = os.getenv("COSMOS_DB_CONTAINER")
+        self.container = "messages"
         self._init_client()
 
     def _init_client(self):

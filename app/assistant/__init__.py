@@ -1,7 +1,4 @@
 import json
-import base64
-import re
-import hmac, hashlib
 import uuid
 import logging
 from bs4 import BeautifulSoup
@@ -142,26 +139,13 @@ class Assistant(GPTClient):
             tag.decompose()
         return " ".join(soup.get_text(separator=" ").split())
 
-    # for embedding and extracting context in email body
-    def _embed_context(self, email_html: str, context: dict) -> str:
-        encoded = base64.b64encode(json.dumps(context).encode()).decode()
-        comment = f"\n<!-- __CTX__:{encoded} -->"
-        return email_html + comment
-
-    def _extract_context(self, email_body: str) -> dict | None:
-        match = re.search(r'<!-- __CTX__:([A-Za-z0-9+/=]+) -->', email_body)
-        if not match:
-            return None
-        try:
-            return json.loads(base64.b64decode(match.group(1)).decode())
-        except Exception:
-            return None
-
     def contact(self, customer: dict):
         # generate content with AI
         vehicle = customer["vehicle"]
         dealership = customer["dealership"]
         lead = customer["lead"]
+        notes = lead.get("notes", [])
+        notes_text = " | ".join([n["text"] for n in notes if n.get("text")]) if isinstance(notes, list) else str(notes)
         vehicle_context = f"""
     Vehicle on file:
     - Year/Make/Model/Trim: {vehicle["year"]} {vehicle["make"]} {vehicle["model"]} {vehicle["trim"]}
@@ -170,7 +154,7 @@ class Assistant(GPTClient):
     - Transmission: {vehicle["transmission"]}
     - Additional notes: {vehicle["comments"]}
     - Lead name: {lead["fname"]}
-    - Lead notes: {lead.get("notes", "")}
+    - Lead notes: {notes_text}
     - Dealership: {dealership["name"]} | {dealership["city"]} | {dealership["phone"]} | {dealership["email"]}
     """
         user_prompt = f"""Please generate the email content. 
@@ -197,16 +181,7 @@ Contact Info Block:
         subject, body = self._process_response(resp["choices"][0]["message"]["content"])
         subject, email_content = self._build_email_content(customer, subject, body)
         # call send
-        # added context embedding for reply extraction
         to = customer["lead"]["email"]
-        email_content = self._embed_context(email_content, {
-            "conversationId": customer["conversationId"],
-            "leadId": customer["lead"]["id"],
-            "vehicleId": customer["vehicle"]["id"],
-            "dealerId": customer["dealership"]["id"],
-            "vehicle": customer["vehicle"],
-            "dealership": customer["dealership"]
-        })
         EmailFactory.get_provider("gmail").send(to, subject, email_content)
         # store to db
         msg = {
@@ -238,11 +213,7 @@ Contact Info Block:
             messages.append({"role": item["role"], "content": body})
         return messages
 
-    def reply(self, received_email):
-        context = self._extract_context(received_email["body"])
-        if not context:
-            logging.warning(f"No embedded context found in reply from {received_email['sender']}")
-            return
+    def reply(self, received_email: dict, context: dict):
         self.save_received_message(received_email, context)
         prompts = self._get_default_message()
         # fetch history
@@ -280,7 +251,6 @@ Use the vehicle details above when answering any questions about the vehicle. Do
 
         subject, body = self._process_response(raw_content)
         email_content = build_email_template(body)
-        email_content = self._embed_context(email_content, context)
         # call reply
         EmailFactory.get_provider("gmail").reply(received_email["sender"], received_email["message_id"], received_email["subject"], email_content)
         # store to db
