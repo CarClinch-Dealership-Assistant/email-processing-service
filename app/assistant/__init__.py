@@ -73,7 +73,7 @@ class Assistant(GPTClient):
             "subject": data.get("subject", ""),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        CosmosDBClient().save_message_to_container("messages", message_doc)
+        CosmosDBClient().get_default_container_client(message_doc)
         logging.info(f"Stored message: {message_doc['id']}")
         return message_doc["id"]
 
@@ -90,7 +90,7 @@ class Assistant(GPTClient):
             "subject": data.get("subject", ""),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        CosmosDBClient().save_message_to_container("messages", message_doc)
+        CosmosDBClient().get_default_container_client(message_doc)
         logging.info(f"Stored message: {message_doc['id']}")
         return message_doc["id"]
 
