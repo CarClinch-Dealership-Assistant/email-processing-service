@@ -53,3 +53,16 @@ class CosmosDBClient:
             logging.error(f"Query failed: {e.message}")
             return []
 
+    def query_items_from_container(self, container_name: str, query: str, params: list):
+        try:
+            container = self.get_container_client(self.database, container_name)
+            items = container.query_items(
+                query=query,
+                parameters=params,
+                enable_cross_partition_query=True
+            )
+            return [item for item in items]
+        except exceptions.CosmosHttpResponseError as e:
+            logging.error(f"Query failed: {e.message}")
+            return []
+

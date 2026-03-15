@@ -1,3 +1,5 @@
+from email.utils import parseaddr
+from app.database.cosmos import CosmosDBClient
 import azure.functions as func
 import azure.durable_functions as df
 from dataclasses import asdict
@@ -81,7 +83,59 @@ def process_and_reply_activity(email):
         return email
     logging.info(f"Processing email from: {email['sender']}")
     try:
-        Assistant().reply(email)
+        _, sender_email = parseaddr(email["sender"])
+        db = CosmosDBClient()
+
+        # 1. find lead by email
+        leads = db.query_items_from_container("leads",
+            "SELECT * FROM c WHERE c.email = @email",
+            [{"name": "@email", "value": sender_email.lower()}]
+        )
+        if not leads:
+            logging.warning(f"No lead found for sender: {sender_email}")
+            return False
+        lead = leads[0]
+
+        # 2. find most recent active conversation for lead
+        conversations = db.query_items_from_container("conversations",
+            "SELECT * FROM c WHERE c.leadId = @leadId AND c.status = 1 ORDER BY c.timestamp DESC OFFSET 0 LIMIT 1",
+            [{"name": "@leadId", "value": lead["id"]}]
+        )
+        if not conversations:
+            logging.warning(f"No active conversation found for lead: {lead['id']}")
+            return False
+        conversation = conversations[0]
+
+        # 3. fetch vehicle
+        vehicles = db.query_items_from_container("vehicles",
+            "SELECT * FROM c WHERE c.id = @id",
+            [{"name": "@id", "value": conversation["vehicleId"]}]
+        )
+        if not vehicles:
+            logging.warning(f"Vehicle not found: {conversation['vehicleId']}")
+            return False
+
+        # 4. fetch dealership
+        dealerships = db.query_items_from_container("dealerships",
+            "SELECT * FROM c WHERE c.id = @id",
+            [{"name": "@id", "value": conversation["dealerId"]}]
+        )
+        if not dealerships:
+            logging.warning(f"Dealership not found: {conversation['dealerId']}")
+            return False
+
+        context = {
+            "conversationId": conversation["id"],
+            "leadId": lead["id"],
+            "vehicleId": conversation["vehicleId"],
+            "dealerId": conversation["dealerId"],
+            "vehicle": vehicles[0],
+            "dealership": dealerships[0]
+        }
+
+        Assistant().reply(email, context)
+        return True
+
     except Exception as e:
         logging.error(f"Error sending email: {e}")
         return False
