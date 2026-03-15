@@ -144,8 +144,8 @@ class Assistant(GPTClient):
         vehicle = customer["vehicle"]
         dealership = customer["dealership"]
         lead = customer["lead"]
-        notes = lead.get("notes", [])
-        notes_text = " | ".join([n["text"] for n in notes if n.get("text")]) if isinstance(notes, list) else str(notes)
+        notes = lead.get("notes", "")
+        notes_text = notes if isinstance(notes, str) else " | ".join([n["text"] for n in notes if n.get("text")])
         vehicle_context = f"""
     Vehicle on file:
     - Year/Make/Model/Trim: {vehicle["year"]} {vehicle["make"]} {vehicle["model"]} {vehicle["trim"]}
