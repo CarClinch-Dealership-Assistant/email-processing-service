@@ -50,7 +50,9 @@ class SmtpProvider:
             # Get the mailing list ID
             mail_ids = messages[0].split()
 
-            for m_id in mail_ids:
+            latest_ids = reversed(mail_ids[-5:])
+
+            for m_id in latest_ids:
                 # Get the specific content of the email
                 res, msg_data = mail.fetch(m_id, "(RFC822)")
                 for response_part in msg_data:
