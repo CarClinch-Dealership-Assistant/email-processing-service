@@ -8,7 +8,7 @@ class CosmosDBClient:
     def __init__(self):
         self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
-        self.container = os.getenv("COSMOS_DB_CONTAINER")
+        self.container = "messages"
         self._init_client()
 
     def _init_client(self):
@@ -44,6 +44,19 @@ class CosmosDBClient:
     def query_items_from_default_container(self, query: str, params: list[dict[str, str]]):
         try:
             items = self.get_default_container_client().query_items(
+                query=query,
+                parameters=params,
+                enable_cross_partition_query=True
+            )
+            return [item for item in items]
+        except exceptions.CosmosHttpResponseError as e:
+            logging.error(f"Query failed: {e.message}")
+            return []
+
+    def query_items_from_container(self, container_name: str, query: str, params: list):
+        try:
+            container = self.get_container_client(self.database, container_name)
+            items = container.query_items(
                 query=query,
                 parameters=params,
                 enable_cross_partition_query=True
