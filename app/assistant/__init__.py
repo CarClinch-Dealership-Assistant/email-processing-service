@@ -1,5 +1,7 @@
 import json
-import os
+import base64
+import re
+import hmac, hashlib
 import uuid
 import logging
 from bs4 import BeautifulSoup
@@ -65,34 +67,33 @@ class Assistant(GPTClient):
         message_doc = {
             "id": f"msg_{uuid.uuid4().hex[:10]}",
             "conversationId": data.get("conversationId", ""),
-            "body": data.get("body", ""),
-            "customer": data.get("customer", ""),
-            "source": 0,
-            "messageID": data.get("messageId", ""),  # this email's Message-ID, for inbound to match against
-            "inReplyTo": data.get("Message-ID", ""),
+            "leadId": data.get("leadId", ""),
+            "vehicleId": data.get("vehicleId", ""),
+            "dealerId": data.get("dealerId", ""),
+            "emailMessageId": data.get("emailMessageId", ""),
             "role": data.get("role", ""),
-            # inbound's Message-ID, null for first outbound
+            "body": data.get("body", ""),
+            "subject": data.get("subject", ""),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        CosmosDBClient().save_message_to_default_container(message_doc)
+        CosmosDBClient().save_message_to_container("messages", message_doc)
         logging.info(f"Stored message: {message_doc['id']}")
         return message_doc["id"]
 
-    def save_received_message(self, data: dict):
+    def save_received_message(self, data: dict, context: dict):
         message_doc = {
             "id": f"msg_{uuid.uuid4().hex[:10]}",
-            "conversationId": data.get("conversationId", ""),
+            "conversationId": context.get("conversationId", ""),
+            "leadId": context.get("leadId", ""),
+            "vehicleId": context.get("vehicleId", ""),
+            "dealerId": context.get("dealerId", ""),
+            "emailMessageId": data.get("message_id", ""),
+            "role": "user",
             "body": data.get("body", ""),
-            "customer": data.get("sender", ""),
-            "source": data.get("source", ""),
-            "messageID": data.get("message_id", ""),  # this email's Message-ID, for inbound to match against
-            "inReplyTo": data.get("Message-ID", ""),
-            "role": data.get("role", "user"),
             "subject": data.get("subject", ""),
-            # inbound's Message-ID, null for first outbound
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        CosmosDBClient().save_message_to_default_container(message_doc)
+        CosmosDBClient().save_message_to_container("messages", message_doc)
         logging.info(f"Stored message: {message_doc['id']}")
         return message_doc["id"]
 
@@ -122,6 +123,9 @@ class Assistant(GPTClient):
             "vehicle_model": vehicle["model"],
             "vehicle_status": "new" if vehicle["status"] == 0 else "used",
             "vehicle_trim": vehicle["trim"],
+            "vehicle_mileage": vehicle["mileage"],
+            "vehicle_transmission": vehicle["transmission"],
+            "vehicle_comments": vehicle["comments"],
             "dealership_email": dealership["email"],
             "dealership_phone": dealership["phone"],
             "dealership_address": address,
@@ -138,21 +142,52 @@ class Assistant(GPTClient):
             tag.decompose()
         return " ".join(soup.get_text(separator=" ").split())
 
+    # for embedding and extracting context in email body
+    def _embed_context(self, email_html: str, context: dict) -> str:
+        encoded = base64.b64encode(json.dumps(context).encode()).decode()
+        comment = f"\n<!-- __CTX__:{encoded} -->"
+        return email_html + comment
+
+    def _extract_context(self, email_body: str) -> dict | None:
+        match = re.search(r'<!-- __CTX__:([A-Za-z0-9+/=]+) -->', email_body)
+        if not match:
+            return None
+        try:
+            return json.loads(base64.b64decode(match.group(1)).decode())
+        except Exception:
+            return None
+
     def contact(self, customer: dict):
         # generate content with AI
-        user_prompt = """Please generate the email content. 
-Please do not include labels like 'Subject:', 'Salutation:', 'Body:', or 'Closing:' in the response. These were only intended as prompts to indicate what each section should contain.
+        vehicle = customer["vehicle"]
+        dealership = customer["dealership"]
+        lead = customer["lead"]
+        vehicle_context = f"""
+    Vehicle on file:
+    - Year/Make/Model/Trim: {vehicle["year"]} {vehicle["make"]} {vehicle["model"]} {vehicle["trim"]}
+    - Status: {"new" if vehicle["status"] == 0 else "used"}
+    - Mileage: {vehicle["mileage"]}
+    - Transmission: {vehicle["transmission"]}
+    - Additional notes: {vehicle["comments"]}
+    - Lead name: {lead["fname"]}
+    - Lead notes: {lead.get("notes", "")}
+    - Dealership: {dealership["name"]} | {dealership["city"]} | {dealership["phone"]} | {dealership["email"]}
+    """
+        user_prompt = f"""Please generate the email content. 
+Do not include any labels, brackets, or section markers such as [Subject:], [Salutation:], [Body:], [Closing:], or any similar tags anywhere in the output. Write it as a natural, flowing email.
+Be sure to use the "Lead notes" to guide the primary motivation for answering questions.
+{vehicle_context}
 Expected Output Structure:
 ```
-[Subject:] Update regarding your inquiry: {vehicle_year} {vehicle_make} {vehicle_model}
-[Salutation:] Dear {customer_name},
-[Body:] Thank you for contacting us at our {dealership_city} location... [Incorporate vehicle details here] ...
+[Subject:] Inquiry: {{vehicle_year}} {{vehicle_make}} {{vehicle_model}}
+[Salutation:] Dear {{customer_name}},
+[Body:] Thank you for contacting us at our {{dealership_city}} location... [Incorporate vehicle details here] ...
 [Closing:] Best regards,
-The Sales Team at {dealership_city}
+The Sales Team at {{dealership_city}}
 Contact Info Block:
-{dealership_phone} | {dealership_email}
-{dealership_address}
-{dealership_city}, {dealership_province} {dealership_postal_code}
+{{dealership_phone}} | {{dealership_email}}
+{{dealership_address}}
+{{dealership_city}}, {{dealership_province}} {{dealership_postal_code}}
 ```
 """
         prompts = self._get_default_message()
@@ -162,16 +197,27 @@ Contact Info Block:
         subject, body = self._process_response(resp["choices"][0]["message"]["content"])
         subject, email_content = self._build_email_content(customer, subject, body)
         # call send
+        # added context embedding for reply extraction
         to = customer["lead"]["email"]
+        email_content = self._embed_context(email_content, {
+            "conversationId": customer["conversationId"],
+            "leadId": customer["lead"]["id"],
+            "vehicleId": customer["vehicle"]["id"],
+            "dealerId": customer["dealership"]["id"],
+            "vehicle": customer["vehicle"],
+            "dealership": customer["dealership"]
+        })
         EmailFactory.get_provider("gmail").send(to, subject, email_content)
         # store to db
         msg = {
-            "customer": to,
-            "conversationId": "",
+            "conversationId": customer["conversationId"],
+            "leadId": customer["lead"]["id"],
+            "vehicleId": customer["vehicle"]["id"],
+            "dealerId": customer["dealership"]["id"],
+            "emailMessageId": "",
+            "role": "assistant",
             "body": self._strip_html(email_content),
-            "messageId": "",
-            "Message-ID": "",
-            "role": "assistant"
+            "subject": subject
         }
         self.store_message(msg)
 
@@ -182,41 +228,40 @@ Contact Info Block:
         body = body.replace("\r\n", "<br />").replace("\n", "<br />")
         return (subject, body)
 
-    def _get_email_history(self, customer: str):
-        query = "SELECT * FROM c WHERE c.customer = @address"
-        params = [
-            {"name": "@address", "value": customer}
-        ]
-
+    def _get_email_history(self, conversation_id: str):
+        query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
+        params = [{"name": "@conversationId", "value": conversation_id}]
         items = CosmosDBClient().query_items_from_default_container(query, params)
         messages = []
-
         for item in items:
             body = "Customer Reply: " + item["body"] if item["role"] == "user" else item["body"]
-            messages.append({
-                "role": item["role"], "content": body,
-            })
-
+            messages.append({"role": item["role"], "content": body})
         return messages
 
-    def _save_received_messages(self, received_email):
-        msg = {
-            "customer": received_email["sender"],
-            "conversationId": "",
-            "body": self._strip_html(received_email["body"]),
-            "messageId": "",
-            "Message-ID": received_email["message_id"],
-            "role": "user"
-        }
-        self.store_message(msg)
-
     def reply(self, received_email):
-        self.save_received_message(received_email)
+        context = self._extract_context(received_email["body"])
+        if not context:
+            logging.warning(f"No embedded context found in reply from {received_email['sender']}")
+            return
+        self.save_received_message(received_email, context)
         prompts = self._get_default_message()
         # fetch history
-        history = self._get_email_history(received_email["sender"])
+        history = self._get_email_history(context["conversationId"])
         prompts.extend(history)
-        user_prompt = "Please generate the email content for replying. No variables could be replaced."
+        vehicle = context.get("vehicle")
+        dealership = context.get("dealership")
+        vehicle_context = f"""
+Vehicle on file:
+- Year/Make/Model/Trim: {vehicle["year"]} {vehicle["make"]} {vehicle["model"]} {vehicle["trim"]}
+- Status: {"new" if vehicle["status"] == 0 else "used"}
+- Mileage: {vehicle["mileage"]}
+- Transmission: {vehicle["transmission"]}
+- Additional notes: {vehicle["comments"]}
+- Dealership: {dealership["city"]} | {dealership["phone"]} | {dealership["email"]}
+"""
+        user_prompt = f"""Please generate the email content for replying. no variables need to be replaced.
+{vehicle_context}
+Use the vehicle details above when answering any questions about the vehicle. Do not invent specs not listed here."""
         prompts.append({"role": "user", "content": user_prompt})
         # generate content with AI
         resp = self.chat(prompts)
@@ -235,21 +280,18 @@ Contact Info Block:
 
         subject, body = self._process_response(raw_content)
         email_content = build_email_template(body)
+        email_content = self._embed_context(email_content, context)
         # call reply
-        EmailFactory.get_provider("gmail").reply(
-            received_email["sender"],
-            received_email["message_id"],
-            received_email["subject"],
-            email_content
-        )
+        EmailFactory.get_provider("gmail").reply(received_email["sender"], received_email["message_id"], received_email["subject"], email_content)
         # store to db
-        msg = {
-            "id": f"msg_{uuid.uuid4().hex[:10]}",
-            "customer": received_email["sender"],
-            "conversationId": "",
-            "body": body.replace("<br />", "\n"),
-            "messageId": "",
-            "Message-ID": received_email["message_id"],
-            "role": "assistant"
+        msg ={
+            "conversationId": context.get("conversationId", ""),
+            "leadId": context.get("leadId", ""),
+            "vehicleId": context.get("vehicleId", ""),
+            "dealerId": context.get("dealerId", ""),
+            "emailMessageId": received_email.get("message_id", ""),
+            "role": "assistant",
+            "body": self._strip_html(email_content),
+            "subject": subject
         }
         self.store_message(msg)
