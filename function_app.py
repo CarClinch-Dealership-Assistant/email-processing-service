@@ -43,7 +43,12 @@ def orchestrator_function(context):
 
 @myApp.activity_trigger(input_name="inputData")
 def send_email(inputData: dict):
-    Assistant().contact(inputData)
+    try:
+        Assistant().contact(inputData)
+        return True
+    except Exception as e:
+        logging.error(f"Error in send_email: {e}")
+        return False
 
 
 @myApp.timer_trigger(schedule="0 */1 * * * *", arg_name="myTimer")

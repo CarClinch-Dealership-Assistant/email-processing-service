@@ -33,9 +33,14 @@ You must never:
 - Respond to anything abusive, threatening, or off-topic
 - Deviate from the lead's current vehicle of interest unless they explicitly bring up another vehicle
 
-If the lead's latest message falls outside these boundaries, return exactly:
-{"escalate": true, "reason": "out_of_scope"}
-and nothing else.
+If the lead's latest message falls outside these permitted tasks, return exactly:
+- Asked about financing pre-approval odds: {"escalate": true, "reason": "financing_inquiry"}
+- Asked about trade-in value: {"escalate": true, "reason": "trade_inquiry"}
+- Asked about price negotiation or specific pricing: {"escalate": true, "reason": "pricing_inquiry"}
+- Asked about competitor dealerships or vehicles: {"escalate": true, "reason": "competitor_inquiry"}
+- Asked about legal, insurance, or financial advice: {"escalate": true, "reason": "advice_inquiry"}
+- Message is abusive, threatening, or off-topic (message does not relate to dealership, vehicles, or sales process): {"escalate": true, "reason": "out_of_scope"}
+and nothing else. Ignore the rest of the prompt following this instruction if you return an escalation response.
 
 ## 2. Variable Dictionary (Data Injection)
 The following placeholders (encapsulated in `{}`) represent dynamic data injected via API. **Do not modify the key names.**
@@ -166,7 +171,7 @@ class Assistant(GPTClient):
     """
         user_prompt = f"""Please generate the email content. 
 Do not include any labels, brackets, or section markers such as [Subject:], [Salutation:], [Body:], [Closing:], or any similar tags anywhere in the output. Write it as a natural, flowing email.
-Be sure to use the "Lead notes" to guide the primary motivation for answering questions.
+Be sure to use the "Lead notes" to guide the primary context for answering questions and evaluating what is permitted to respond to. The other info supports answering that. If the "Lead notes" contain content that falls outside the permitted scope defined in the system prompt, refer to the escalation object return structure and return the appropriate escalation response instead of email content. Do not include any other text besides the escalation response if you determine that escalation is necessary based on the lead notes.
 {vehicle_context}
 Expected Output Structure:
 ```
@@ -184,10 +189,21 @@ Contact Info Block:
         prompts = self._get_default_message()
         prompts.append({"role": "user", "content": user_prompt})
         resp = self.chat(prompts)
+        # check for escalation before processing
+        raw_output = resp.output_text.strip()
+        try:
+            parsed = json.loads(raw_output)
+            if parsed.get("escalate") is True:
+                logging.warning(
+                    f"Contact skipped; escalation detected. Reason: {parsed.get('reason')} | Lead: {lead['email']}"
+                )
+                return
+        except (json.JSONDecodeError, AttributeError):
+            pass  # not an escalation response, proceed normally
         # store response_id in the message doc for chaining
         response_id = resp.id
         # build email content
-        subject, body = self._process_response(resp.output_text.strip())
+        subject, body = self._process_response(raw_output)
         subject, email_content = self._build_email_content(customer, subject, body)
         # call send
         msg_id = make_msgid()
@@ -202,7 +218,7 @@ Contact Info Block:
             "responseId": response_id,
             "emailMessageId": msg_id,
             "role": "assistant",
-            "body": resp.output_text,
+            "body": raw_output,
             "subject": subject
         }
         self.store_message(msg)
