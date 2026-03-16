@@ -9,7 +9,8 @@ def unified_email_processor(raw_data: dict, source: str):
         sender=raw_data.get("from"),
         subject=raw_data.get("subject"),
         body=raw_data.get("content"),
-        source=source
+        source=source,
+        in_reply_to=raw_data.get("In-Reply-To", "")
     )
     EmailDB.save(email_obj)
     return email_obj
