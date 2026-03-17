@@ -2,15 +2,15 @@ import os
 from openai import OpenAI
 
 
-class GPTClient():
+class GPTClient:
     def __init__(self):
-        self.model= os.getenv("OPENAI_MODEL_NAME")
+        self.model = os.getenv("OPENAI_MODEL_NAME")
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.base_url = os.getenv("OPENAI_BASE_URL")
         self.init_client()
 
     def init_client(self):
-         self.cli = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.cli = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def chat(self, messages: list[dict[str, str]], previous_response_id: str = None):
         # extract system prompt from messages if present
