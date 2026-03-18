@@ -1,5 +1,3 @@
-from msgraph.generated.models.todo import Todo
-
 from app.database.models import EmailDB
 from .protocol import StandardEmail
 
