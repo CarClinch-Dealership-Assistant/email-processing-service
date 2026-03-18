@@ -8,6 +8,7 @@ class CosmosDBClient:
     def __init__(self):
         self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
+        self.verify_ssl = os.getenv("COSMOS_VERIFY_SSL", "true").lower() != "false"
         self.container = "messages"
         self._init_client()
 
@@ -18,14 +19,13 @@ class CosmosDBClient:
                 credential=DefaultAzureCredential()
             )
             return
-
         connection_string = os.getenv("COSMOS_CONNECTION_STRING")
-        if connection_string == "" or not connection_string:
+        if not connection_string:
             raise ValueError("Either COSMOS_ENDPOINT or COSMOS_CONNECTION_STRING must be set")
-
+        
         self.client = CosmosClient.from_connection_string(
             connection_string,
-            connection_verify=True
+            connection_verify=self.verify_ssl
         )
 
     def _get_database_client(self, db_name: str):

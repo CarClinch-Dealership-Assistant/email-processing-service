@@ -89,7 +89,7 @@ class Assistant(GPTClient):
     # helper function to build email content using the subject and body returned from the model and the formatting data
     def _build_email_content(self, customer, subject, content):
         data = self._get_formatting_data(customer)
-        return subject.format(**data), build_email_template(content.format(**data))
+        return subject, build_email_template(content.format(**data))
 
     # def _strip_html(self, html: str) -> str:
     #     soup = BeautifulSoup(html, "html.parser")
