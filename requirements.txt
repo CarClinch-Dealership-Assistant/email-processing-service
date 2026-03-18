@@ -3,10 +3,13 @@ azure-functions-durable
 azure-data-tables
 Pillow
 azure-communication-email
+azure-identity
 dotenv
 azure-cosmos
 bs4
-
+openai
 # for testing
 pytest
 pytest-asyncio
+pytest-mock
+msal

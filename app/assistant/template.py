@@ -24,26 +24,6 @@ content = """
 
       {customer}
 
-      <!-- Dealership block -->
-      <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:16px; margin:16px 0;">
-        <div style="font-size:14px; font-weight:600; color:#0b1f33; margin-bottom:8px;">
-          Dealership contact details
-        </div>
-
-        <div style="font-size:14px; line-height:1.7; color:#4b5563;">
-          {dealership}
-        </div>
-      </div>
-
-      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.7; color:#4b5563;">
-        Looking forward to helping you find the right fit.
-      </p>
-
-      <p style="margin:0 0 16px 0; font-size:14px; line-height:1.7; color:#4b5563;">
-        Best,<br />
-        <strong style="color:#111827;">CarClinch</strong>
-      </p>
-
     </div>
 
     <!-- Footer -->
@@ -59,5 +39,5 @@ content = """
 </html>
 """
 
-def build_email_template(customer, dealership):
-    return content.format(customer=customer, dealership=dealership)
+def build_email_template(customer):
+    return content.format(customer=customer)
