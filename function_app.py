@@ -48,7 +48,7 @@ def send_email(inputData: dict):
         return True
     except Exception as e:
         logging.error(f"Error in send_email: {e}")
-        return False
+        raise
 
 
 @myApp.timer_trigger(schedule="0 */1 * * * *", arg_name="myTimer")

@@ -65,4 +65,20 @@ class CosmosDBClient:
         except exceptions.CosmosHttpResponseError as e:
             logging.error(f"Query failed: {e.message}")
             return []
+    
+    def get_item_by_id(self, item_id: str, container_name: str) -> dict:
+        results = self.query_items_from_container(
+            container_name,
+            "SELECT * FROM c WHERE c.id = @id",
+            [{"name": "@id", "value": item_id}]
+        )
+        return results[0] if results else None
+
+    def update_item_in_container(self, container_name: str, item: dict) -> dict:
+        try:
+            self.get_container_client(self.database, container_name).upsert_item(body=item)
+            return item
+        except exceptions.CosmosHttpResponseError as e:
+            logging.error(f"update_item_in_container failed for {item.get('id')}: {e.message}")
+            return None
 
