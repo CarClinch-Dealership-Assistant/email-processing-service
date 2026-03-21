@@ -112,7 +112,7 @@ class Assistant(GPTClient):
         result = re.split(r'\n--\s*\n', result, maxsplit=1)[0]
         return result.strip()
 
-    # helper function to resolve context for a reply when in_reply_to is present 
+    # helper function to resolve id (ex. vehicleId, dealerId, etc.) context for a reply when in_reply_to is present 
     # but there is no chain match based on responseId
     def _resolve_context_from_sender(self, sender: str):
         _, sender_email = parseaddr(sender)
@@ -170,6 +170,20 @@ class Assistant(GPTClient):
         except (json.JSONDecodeError, AttributeError):
             return False  # not an escalation response, proceed normally
 
+    # def _get_email_history(self, conversation_id: str):
+    #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
+    #     params = [{"name": "@conversationId", "value": conversation_id}]
+    #     items = CosmosDBClient().query_items_from_default_container(query, params)
+    #     messages = []
+    #     for item in items:
+    #         body = (
+    #             "Customer Reply: " + item["body"]
+    #             if item["role"] == "user"
+    #             else item["body"]
+    #         )
+    #         messages.append({"role": item["role"], "content": body})
+    #     return messages
+    
 # ------------- MAIN FUNCTIONALITY -------------
 
     # for initial contact from lead form intake
@@ -223,20 +237,6 @@ class Assistant(GPTClient):
         self._store_message(
             context, response_id, msg_id, "assistant", raw_body, subject
         )
-
-    # def _get_email_history(self, conversation_id: str):
-    #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
-    #     params = [{"name": "@conversationId", "value": conversation_id}]
-    #     items = CosmosDBClient().query_items_from_default_container(query, params)
-    #     messages = []
-    #     for item in items:
-    #         body = (
-    #             "Customer Reply: " + item["body"]
-    #             if item["role"] == "user"
-    #             else item["body"]
-    #         )
-    #         messages.append({"role": item["role"], "content": body})
-    #     return messages
 
     # for subsequent replies from lead; main additions is using previous context by responseId when calling .chat()
     def reply(self, received_email):
