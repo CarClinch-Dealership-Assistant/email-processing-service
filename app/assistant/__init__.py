@@ -10,7 +10,7 @@ from app.database.cosmos import CosmosDBClient
 from app.email.factory import EmailFactory
 from app.assistant.gpt import GPTClient
 from app.assistant.template import build_email_template
-from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT
+from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.assistant.analysis import Analysis
 
 
@@ -170,6 +170,71 @@ class Assistant(GPTClient):
         except (json.JSONDecodeError, AttributeError):
             return False  # not an escalation response, proceed normally
 
+    # helper to if we need to followup 
+    # check if conv status is still active or not
+    # check who sent the last message -
+    # if the LAST message in the thread is from the user, they replied
+    # if its from us, they ignored us and we need to follow up
+    def needs_followup(self, conversation_id: str, start_time: str) -> bool:
+        # is the conversation still active?
+        conv_query = "SELECT * FROM c WHERE c.id = @id"
+        convs = self.db.query_items_from_container(
+            "conversations", 
+            conv_query, 
+            [{"name": "@id", "value": conversation_id}]
+        )
+        
+        # if the conversation doesn't exist or its status is 0 (inactive), stop the timer.
+        if not convs or convs[0].get("status") == 0:
+            logging.info(f"Conversation {conversation_id} is inactive or missing. Aborting follow-up.")
+            return False
+        
+        query = """
+            SELECT VALUE COUNT(1) 
+            FROM c 
+            WHERE c.conversationId = @convId 
+              AND c.role = 'user' 
+              AND c.timestamp > @startTime
+        """
+        params = [
+            {"name": "@convId", "value": conversation_id},
+            {"name": "@startTime", "value": start_time}
+        ]
+        
+        try:
+            result = self.db.query_items_from_default_container(query, params)
+            count = result[0] if result else 0
+            
+            # if count is 0, they haven't replied, so we need to follow up.
+            return count == 0
+        except Exception as e:
+            logging.error(f"Error checking follow-up status: {e}")
+            # default to False (don't send) to prevent spamming on DB errors
+            return False
+    
+    # helper to pull the data back out of Cosmos to hydrate the prompt context for the follow-up sequence 
+    # since it runs independently of the reply chain and won't have the previous responseId to pull context from
+    def _hydrate_customer_context(self, conversation_id: str) -> dict:
+        # grab a message to get the linking IDs
+        msgs = self.db.query_items_from_default_container(
+            "SELECT TOP 1 * FROM c WHERE c.conversationId = @id", 
+            [{"name": "@id", "value": conversation_id}]
+        )
+        if not msgs: return None
+        
+        lead_id, vehicle_id, dealer_id = msgs[0]["leadId"], msgs[0]["vehicleId"], msgs[0]["dealerId"]
+        
+        # fetch entities
+        lead = self.db.query_items_from_container("leads", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":lead_id}])
+        vehicle = self.db.query_items_from_container("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did", [{"name":"@id","value":vehicle_id}, {"name":"@did","value":dealer_id}])
+        dealer = self.db.query_items_from_container("dealerships", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":dealer_id}])
+        
+        return {
+            "conversationId": conversation_id,
+            "lead": lead[0] if lead else {},
+            "vehicle": vehicle[0] if vehicle else {},
+            "dealership": dealer[0] if dealer else {}
+        }
     # def _get_email_history(self, conversation_id: str):
     #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
     #     params = [{"name": "@conversationId", "value": conversation_id}]
@@ -326,3 +391,70 @@ class Assistant(GPTClient):
         self._store_message(
             context, response_id, msg_id, "assistant", raw_body, subject
         )
+        
+        return context.get("conversationId", "")
+
+    # for followup sequence, which is similar to reply but with added logic to check for alternatives 
+    # in the 2nd follow-up and inject that into the prompt
+    def follow_up(self, conversation_id: str, sequence: int):
+        customer = self._hydrate_customer_context(conversation_id)
+        if not customer: 
+            return
+        
+        # check if the vehicle has been sold (status == 0)
+        # if sold, abort the follow-up sequence and close the conversation
+        if customer["vehicle"].get("status") == 0:
+            logging.info(f"Vehicle {customer['vehicle']['id']} sold. Aborting follow-up.")
+            self._set_conversation_status(conversation_id, 0) # mark conversation inactive
+            return
+
+        data = self._get_formatting_data(customer)
+        
+        # only suggest alt vehicles in 2nd followup and only if the lead hasn't replied yet
+        alt_vehicles_text = "No alternatives required for this sequence."
+        if sequence == 2:
+            dealer_id = customer["dealership"]["id"]
+            vehicle_id = customer["vehicle"]["id"]
+            
+            alt_vehicles = self.db.query_items_from_container(
+                "vehicles",
+                "SELECT TOP 3 * FROM c WHERE c.dealerId = @did AND c.id != @vid AND c.status = 1",
+                [{"name": "@did", "value": dealer_id},
+                 {"name": "@vid", "value": vehicle_id}]
+            )
+            
+            if alt_vehicles:
+                alt_vehicles_text = ""
+                for v in alt_vehicles:
+                    alt_vehicles_text += f"- {v.get('year')} {v.get('make')} {v.get('model')} ({v.get('trim', 'Base')})\n"
+            else:
+                alt_vehicles_text = "No direct alternative vehicles currently available in stock."
+
+        # add sequence and alternatives into the data dictionary for the prompt formatter
+        data["sequence"] = sequence
+        data["alt_vehicles_text"] = alt_vehicles_text
+
+        # build prompt w the FOLLOWUP_USER_PROMPT
+        user_prompt = FOLLOWUP_USER_PROMPT.format(**data)
+        prompts = self._get_default_message()
+        prompts.append({"role": "user", "content": user_prompt})
+        
+        # rest of this is the same as a usual reply
+        resp = self.chat(prompts)
+        raw_output = resp.output_text.strip()
+        
+        subject, body = self._process_response(raw_output)
+        subject, email_content = self._build_email_content(customer, subject, body)
+        
+        msg_id = make_msgid()
+        EmailFactory.get_provider("gmail").send(customer["lead"]["email"], subject, email_content, msg_id=msg_id)
+        
+        context = {
+            "conversationId": conversation_id, 
+            "leadId": customer["lead"]["id"],
+            "vehicleId": customer["vehicle"]["id"], 
+            "dealerId": customer["dealership"]["id"]
+        }
+        
+        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
+        self._store_message(context, resp.id, msg_id, "assistant", raw_body, subject)

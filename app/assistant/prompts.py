@@ -122,3 +122,28 @@ ANALYSIS_USER_PROMPT = """
 # LEAD MESSAGE
 {received_body}
 """
+
+FOLLOWUP_USER_PROMPT = """
+# (FOLLOWUP USER PROMPT) TASK
+Write a follow-up email to this lead who has not responded to our previous message. Follow the system prompt rules exactly.
+
+# LEAD DATA
+- Name: {customer_name}
+- Original Vehicle of interest: {vehicle_year} {vehicle_make} {vehicle_model}
+- Follow-up Sequence Number: {sequence}
+- Alternative Vehicles:
+{alt_vehicles_text}
+
+# SEQUENCE INSTRUCTIONS
+Adapt your tone and message based on the Follow-up Sequence Number:
+- If Sequence is 1: Write a brief, polite check-in asking if they received the previous information and if they are still interested in the {vehicle_model}.
+- If Sequence is 2: Mention that if the {vehicle_model} isn't the perfect fit, we have other options. Briefly introduce the Alternative Vehicles listed above.
+- If Sequence is 3: Write a final, low-pressure check-in. Ask if they are still in the market or have already purchased a vehicle. [STUB] Include a brief prompt encouraging them to book a test drive if they are still looking.
+
+# FORMAT INSTRUCTIONS
+1. Use this exact subject line: "Re: Your interest in the {vehicle_year} {vehicle_make} {vehicle_model} [ref: {refId}]"
+2. Close with this exact signature block:
+   The Team at {dealership_name}
+   {dealership_phone} | {dealership_email}
+   {dealership_address}, {dealership_city}, {dealership_province} {dealership_postal_code}
+"""
