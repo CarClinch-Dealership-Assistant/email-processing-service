@@ -1,7 +1,7 @@
 
 ## Configuration
 * `FOLLOWUP_TIMER_VALUES`: Comma-separated intervals (e.g., `24,24,24`).
-* `FOLLOWUP_TIME_STRUCTURE`: The unit of time (e.g., `hours`, `minutes`, or `seconds`). This is for testing, as you can shorten the interview to 24 seconds vs 24 hours using this.
+* `FOLLOWUP_TIME_STRUCTURE`: The unit of time (ex. `hours`, `minutes`, or `seconds`). This is for testing, as you can shorten the interview to 24 seconds vs 24 hours using this.
 
 ## Core Components
 * **Intake Trigger (Service Bus):** Processes new lead forms and starts the primary orchestration.
