@@ -12,7 +12,7 @@ from app.assistant.gpt import GPTClient
 from app.assistant.template import build_email_template
 from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT
 from app.assistant.analysis import Analysis
-
+from app.assistant.pii import PIIClient
 
 class Assistant(GPTClient):
     def __init__(self):
@@ -191,8 +191,12 @@ class Assistant(GPTClient):
         # get data dictionary
         data = self._get_formatting_data(customer)
         
+        sanitized_notes = PIIClient().sanitize(data["lead_notes"])
+
+        logging.warning(f"Sanitized lead notes: {sanitized_notes}")
+        
         # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(data["lead_notes"])
+        analysis_results = Analysis().analyze(sanitized_notes)
         logging.warning(f"Analysis results: {analysis_results}")
         if self._escalation_check(json.dumps(analysis_results), data["customer_email"], data["refId"]):
             return  # skip send and store if escalation needed based on analysis
@@ -273,6 +277,7 @@ class Assistant(GPTClient):
         # remove both html and previous quoted replies to get clean message body for analysis and response generation
         stripped_body = self._strip_html(received_email["body"])
         stripped_body = self._strip_quoted_reply(stripped_body)
+        stripped_body = PIIClient().sanitize(stripped_body)
         
         # store the received message in DB for history
         self._store_message(
