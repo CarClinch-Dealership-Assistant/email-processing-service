@@ -11,7 +11,6 @@
 ---
 
 ## The Sequence Logic
-**Wake and check**
 1.  **Initiation:** When an email is sent (`contact` or `reply`), a sub-orchestrator is spawned with the `conversationId` and a `sequence_start_time`.
 2.  **Durable Sleep:** The orchestrator calls `context.create_timer()`. This offloads the state to Azure Storage, stopping resource consumption.
 3.  **Hydration & Validation:** Upon waking, the system performs a checkpoint read in Cosmos DB:
