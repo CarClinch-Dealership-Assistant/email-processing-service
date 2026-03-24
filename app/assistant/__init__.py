@@ -277,9 +277,9 @@ class Assistant(GPTClient):
         # remove both html and previous quoted replies to get clean message body for analysis and response generation
         stripped_body = self._strip_html(received_email["body"])
         stripped_body = self._strip_quoted_reply(stripped_body)
-        stripped_body = PIIClient().sanitize(stripped_body)
+        sanitized_stripped_body = PIIClient().sanitize(stripped_body)
         
-        # store the received message in DB for history
+        # store the received message, not PII sanitized in DB for history
         self._store_message(
             context,
             previous_response_id,
@@ -290,14 +290,14 @@ class Assistant(GPTClient):
         )
         
         # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(stripped_body)
+        analysis_results = Analysis().analyze(sanitized_stripped_body)
         logging.warning(f"Analysis results: {analysis_results}")
         if self._escalation_check(json.dumps(analysis_results), received_email["sender"], context["conversationId"]):
             return  # skip send and store if escalation needed based on analysis
 
         # build prompt with context
         prompts = self._get_default_message()
-        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body)
+        user_prompt = REPLY_USER_PROMPT.format(received_body=sanitized_stripped_body)
         prompts.append({"role": "user", "content": user_prompt})
 
         # generate content with AI
