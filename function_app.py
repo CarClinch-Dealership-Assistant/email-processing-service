@@ -31,38 +31,43 @@ async def sb_trigger(msg: func.ServiceBusMessage,
 
     # Start the orchestrator (same concept as Week 4's client.start_new)
     instance_id = await client.start_new(
-        "orchestrator_function",
+        "contact_email_orchestrator",
         client_input=data
     )
     logging.info(f"Started orchestration {instance_id}")
 
 
 @myApp.orchestration_trigger(context_name="context")
-def orchestrator_function(context):
+def contact_email_orchestrator(context):
     # Get the input data passed from the blob trigger
     input_data = context.get_input()
     logging.info(f"Orchestrator started for: {input_data}")
     # ret is now the response id, email body, and message id
-    yield context.call_activity("send_email", input_data)
+    yield context.call_activity("send_contact_email_activity", input_data)
     
     # start follow-up sequence
-    conversation_id = input_data.get("conversationId")
-    yield context.call_sub_orchestrator("followup_sequence_orchestrator", conversation_id)
+    id_context = {
+        "conversationId": input_data.get("conversationId"),
+        "leadId": input_data["lead"]["id"],
+        "vehicleId": input_data["vehicle"]["id"],
+        "dealerId": input_data["dealership"]["id"]
+    }
+    yield context.call_sub_orchestrator("followup_sequence_orchestrator", id_context)
 
 
 @myApp.activity_trigger(input_name="inputData")
-def send_email(inputData: dict):
+def send_contact_email_activity(inputData: dict):
     try:
         Assistant().contact(inputData)
         return True
     except Exception as e:
-        logging.error(f"Error in send_email: {e}")
+        logging.error(f"Error in send_contact_email: {e}")
         raise
 
 
 @myApp.timer_trigger(schedule="0 */1 * * * *", arg_name="myTimer")
 @myApp.durable_client_input(client_name="client")
-async def timer_imap_polling(myTimer: func.TimerRequest, client: df.DurableOrchestrationClient) -> None:
+async def imap_polling_timer_trigger(myTimer: func.TimerRequest, client: df.DurableOrchestrationClient) -> None:
     # 启动编排器
     instance_id = await client.start_new("reply_email_orchestrator")
     logging.info(f"Started orchestration with ID = '{instance_id}'.")
@@ -76,22 +81,23 @@ def reply_email_orchestrator(context: df.DurableOrchestrationContext):
         return "No emails to process."
     tasks = []
     for email in emails:
-        task = context.call_activity("process_and_reply_activity", email)
+        task = context.call_activity("send_reply_email_activity", email)
         tasks.append(task)
 
     results = yield context.task_all(tasks)
     
-    # only grab valid conversation ID strings
-    results = [
+    # only grab valid id_context dictionaries
+    id_contexts_list = [
         res for res in results 
-        if isinstance(res, str) and res.startswith("conv_")
+        if isinstance(res, dict) and "conversationId" in res
     ]
     
     # start all follow-up sequences at the same time
-    if results:
+    if id_contexts_list:
+        unique_contexts = {ctx["conversationId"]: ctx for ctx in id_contexts_list}.values()
         followup_tasks = [
-            context.call_sub_orchestrator("followup_sequence_orchestrator", conv_id) 
-            for conv_id in set(results)
+            context.call_sub_orchestrator("followup_sequence_orchestrator", ctx) 
+            for ctx in unique_contexts
         ]
         yield context.task_all(followup_tasks)
         
@@ -107,14 +113,14 @@ def fetch_emails_activity(dummy):
 
 
 @myApp.activity_trigger(input_name="email")
-def process_and_reply_activity(email):
+def send_reply_email_activity(email):
     if email is None or isinstance(email, str):
         return email
     logging.info(f"Processing email from: {email['sender']}")
     try:
-        # updated Assistant().reply to return the conversationId
-        conv_id = Assistant().reply(email)
-        return conv_id
+        # updated Assistant().reply to return the id_context
+        id_context = Assistant().reply(email)
+        return id_context
     except Exception as e:
         logging.error(f"Error sending email: {e}")
         return False
@@ -123,10 +129,10 @@ def process_and_reply_activity(email):
 
 @myApp.orchestration_trigger(context_name="context")
 def followup_sequence_orchestrator(context: df.DurableOrchestrationContext):
-    conversation_id = context.get_input()
-    if not conversation_id:
+    id_context = context.get_input()
+    if not id_context or not isinstance(id_context, dict):
         return
-
+    conversation_id = id_context.get("conversationId")
     # get exact time this follow-up sequence started
     sequence_start_time = context.current_utc_datetime.isoformat()
     
@@ -141,23 +147,23 @@ def followup_sequence_orchestrator(context: df.DurableOrchestrationContext):
             "convId": conversation_id, 
             "startTime": sequence_start_time
         }
-        needs_followup = yield context.call_activity("check_needs_followup", check_payload)
+        needs_followup = yield context.call_activity("check_needs_followup_activity", check_payload)
         
         if not needs_followup:
             logging.info(f"User replied to {conversation_id}. Ending follow-up sequence.")
             break 
 
-        payload = {"convId": conversation_id, "sequence": sequence_index + 1}
+        payload = {"id_context": id_context, "sequence": sequence_index + 1}
         yield context.call_activity("send_followup_activity", payload)
 
 @myApp.activity_trigger(input_name="payload")
-def check_needs_followup(payload: dict) -> bool:
+def check_needs_followup_activity(payload: dict) -> bool:
     # update the activity to accept the new payload
     return Assistant().needs_followup(payload["convId"], payload["startTime"])
 
 @myApp.activity_trigger(input_name="payload")
 def send_followup_activity(payload: dict):
-    Assistant().follow_up(payload["convId"], payload["sequence"])
+    Assistant().follow_up(payload["id_context"], payload["sequence"])
     return True
 
 # 2. ACS: Webhook reception (called by Logic App)

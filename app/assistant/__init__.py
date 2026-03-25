@@ -21,15 +21,15 @@ class Assistant(GPTClient):
 
     # helper function to builds message document and stores it in cosmosdb
     def _store_message(
-        self, context, response_id, message_id, role, raw_output, subject
+        self, id_context, response_id, message_id, role, raw_output, subject
     ):
         doc_id = f"msg_{uuid.uuid4().hex[:10]}"
         message_doc = {
             "id": doc_id,
-            "conversationId": context.get("conversationId", ""),
-            "leadId": context.get("leadId", ""),
-            "vehicleId": context.get("vehicleId", ""),
-            "dealerId": context.get("dealerId", ""),
+            "conversationId": id_context.get("conversationId", ""),
+            "leadId": id_context.get("leadId", ""),
+            "vehicleId": id_context.get("vehicleId", ""),
+            "dealerId": id_context.get("dealerId", ""),
             "responseId": response_id,
             "emailMessageId": message_id,
             "role": role,
@@ -112,7 +112,7 @@ class Assistant(GPTClient):
         result = re.split(r'\n--\s*\n', result, maxsplit=1)[0]
         return result.strip()
 
-    # helper function to resolve id (ex. vehicleId, dealerId, etc.) context for a reply when in_reply_to is present 
+    # helper function to resolve id (ex. vehicleId, dealerId, etc.) id_context for a reply when in_reply_to is present 
     # but there is no chain match based on responseId
     def _resolve_context_from_sender(self, sender: str):
         _, sender_email = parseaddr(sender)
@@ -169,7 +169,246 @@ class Assistant(GPTClient):
                 return True
         except (json.JSONDecodeError, AttributeError):
             return False  # not an escalation response, proceed normally
+    
+    # helper to pull the data back out of Cosmos to hydrate the prompt context for the follow-up sequence 
+    # since it runs independently of the reply chain and won't have the previous responseId to pull id_context from
+    def _hydrate_customer_context(self, id_context: dict) -> dict:
+        lead_id = id_context["leadId"]
+        vehicle_id = id_context["vehicleId"]
+        dealer_id = id_context["dealerId"]
+        
+        lead = self.db.query_items_from_container("leads", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":lead_id}])
+        vehicle = self.db.query_items_from_container("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did", [{"name":"@id","value":vehicle_id}, {"name":"@did","value":dealer_id}])
+        dealer = self.db.query_items_from_container("dealerships", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":dealer_id}])
+        
+        return {
+            "conversationId": id_context["conversationId"],
+            "lead": lead[0] if lead else {},
+            "vehicle": vehicle[0] if vehicle else {},
+            "dealership": dealer[0] if dealer else {}
+        }
+    # def _get_email_history(self, conversation_id: str):
+    #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
+    #     params = [{"name": "@conversationId", "value": conversation_id}]
+    #     items = CosmosDBClient().query_items_from_default_container(query, params)
+    #     messages = []
+    #     for item in items:
+    #         body = (
+    #             "Customer Reply: " + item["body"]
+    #             if item["role"] == "user"
+    #             else item["body"]
+    #         )
+    #         messages.append({"role": item["role"], "content": body})
+    #     return messages
+    
+# ------------- MAIN METHODS -------------
 
+    # for initial contact from lead form intake
+    def contact(self, customer: dict):
+        # get data dictionary
+        data = self._get_formatting_data(customer)
+        
+        # FIRST: analyze the lead notes
+        analysis_results = Analysis().analyze(data["lead_notes"])
+        logging.warning(f"Analysis results: {analysis_results}")
+        if self._escalation_check(json.dumps(analysis_results), data["customer_email"], data["refId"]):
+            return  # skip send and store if escalation needed based on analysis
+
+        # build prompt with context
+        user_prompt = CONTACT_USER_PROMPT.format(**data)
+        prompts = self._get_default_message()
+        prompts.append({"role": "user", "content": user_prompt})
+        
+        # generate content with AI
+        resp = self.chat(prompts)
+        raw_output = resp.output_text.strip()
+
+        # check for escalation before processing
+        if self._escalation_check(raw_output, data['customer_email'], data["refId"]):
+            return  # skip send and store
+
+        # store response_id in the message doc for chaining
+        response_id = resp.id
+
+        # build email content
+        subject, body = self._process_response(raw_output)
+        subject, email_content = self._build_email_content(customer, subject, body)
+        
+        # call send
+        msg_id = make_msgid()
+        to = customer["lead"]["email"]
+        EmailFactory.get_provider("gmail").send(
+            to, subject, email_content, msg_id=msg_id
+        )
+
+        # store to db
+        id_context = {
+            "conversationId": customer["conversationId"],
+            "leadId": customer["lead"]["id"],
+            "vehicleId": customer["vehicle"]["id"],
+            "dealerId": customer["dealership"]["id"],
+        }
+        
+        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
+        
+        self._store_message(
+            id_context, response_id, msg_id, "assistant", raw_body, subject
+        )
+
+    # for subsequent replies from lead; main additions is using previous context by responseId when calling .chat()
+    def reply(self, received_email):
+        
+        # query for previous message to get id fields and responseId for chaining
+        previous_response_id = None
+        id_context = {}
+        in_reply_to = received_email.get("in_reply_to", "")
+        if in_reply_to:
+            msgs = self.db.query_items_from_default_container(
+                "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'",
+                [{"name": "@msgId", "value": in_reply_to}],
+            )
+            if msgs:
+                previous_response_id = msgs[0].get("responseId")
+                id_context = {
+                    "conversationId": msgs[0].get("conversationId", ""),
+                    "leadId": msgs[0].get("leadId", ""),
+                    "vehicleId": msgs[0].get("vehicleId", ""),
+                    "dealerId": msgs[0].get("dealerId", ""),
+                }
+        # fallback to DB lookup if id_context not resolved from chain
+        if not id_context:
+            logging.warning(
+                f"No chain found for in_reply_to: {in_reply_to}, falling back to DB lookup"
+            )
+            id_context = self._resolve_context_from_sender(received_email["sender"])
+            if not id_context:
+                logging.error(
+                    f"DB id_context resolution failed for sender: {received_email['sender']}. Reply aborted."
+                )
+                return
+
+        # remove both html and previous quoted replies to get clean message body for analysis and response generation
+        stripped_body = self._strip_html(received_email["body"])
+        stripped_body = self._strip_quoted_reply(stripped_body)
+        
+        # store the received message in DB for history
+        self._store_message(
+            id_context,
+            previous_response_id,
+            received_email["message_id"],
+            "user",
+            stripped_body,
+            received_email["subject"],
+        )
+        
+        # FIRST: analyze the lead notes
+        analysis_results = Analysis().analyze(stripped_body)
+        logging.warning(f"Analysis results: {analysis_results}")
+        if self._escalation_check(json.dumps(analysis_results), received_email["sender"], id_context["conversationId"]):
+            return  # skip send and store if escalation needed based on analysis
+
+        # build prompt with context
+        prompts = self._get_default_message()
+        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body)
+        prompts.append({"role": "user", "content": user_prompt})
+
+        # generate content with AI
+        resp = self.chat(prompts, previous_response_id=previous_response_id)
+        raw_output = resp.output_text.strip()
+        
+        # check for escalation before processing
+        if self._escalation_check(raw_output, received_email["sender"], id_context["conversationId"]):
+            return  # skip send and store
+
+        # store response_id in the message doc for chaining
+        response_id = resp.id
+
+        # build email content
+        subject, body = self._process_response(raw_output)
+        email_content = build_email_template(body)
+        
+        # call reply
+        msg_id = make_msgid()
+        EmailFactory.get_provider("gmail").reply(
+            received_email["sender"],
+            received_email["message_id"],
+            received_email["subject"],
+            email_content,
+            msg_id=msg_id,
+        )
+        
+        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
+        
+        # store to db
+        self._store_message(
+            id_context, response_id, msg_id, "assistant", raw_body, subject
+        )
+        
+        return id_context
+
+    # for followup sequence, which is similar to reply but with added logic to check for alternatives 
+    # in the 2nd follow-up and inject that into the prompt
+    def follow_up(self, id_context: dict, sequence: int):
+        logging.info(f"Starting follow-up sequence {sequence} for conversation {id_context.get('conversationId')}")
+        conversation_id = id_context.get("conversationId")
+        customer = self._hydrate_customer_context(id_context)
+        
+        # ensure hydration found records
+        if not customer or not customer.get("lead"): 
+            logging.error(f"Failed to hydrate id_context for {conversation_id}")
+            return
+        
+        # check if the vehicle has been sold (status == 0)
+        # if sold, abort the follow-up sequence and close the conversation
+        if customer["vehicle"].get("status") == 0:
+            logging.info(f"Vehicle {customer['vehicle']['id']} sold. Aborting follow-up.")
+            self._set_conversation_status(conversation_id, 0) # mark conversation inactive
+            return
+
+        data = self._get_formatting_data(customer)
+        
+        # only suggest alt vehicles in 2nd followup and only if the lead hasn't replied yet
+        alt_vehicles_text = "No alternatives required for this sequence."
+        if sequence == 2:
+            dealer_id = id_context["dealerId"]
+            vehicle_id = id_context["vehicleId"]
+            
+            alt_vehicles = self.db.query_items_from_container(
+                "vehicles",
+                "SELECT TOP 3 * FROM c WHERE c.dealerId = @did AND c.id != @vid AND c.status = 1",
+                [{"name": "@did", "value": dealer_id},
+                 {"name": "@vid", "value": vehicle_id}]
+            )
+            
+            if alt_vehicles:
+                alt_vehicles_text = ""
+                for v in alt_vehicles:
+                    alt_vehicles_text += f"- {v.get('year')} {v.get('make')} {v.get('model')} ({v.get('trim', 'Base')})\n"
+            else:
+                alt_vehicles_text = "No direct alternative vehicles currently available in stock."
+
+        # add sequence and alternatives into the data dictionary for the prompt formatter
+        data["sequence"] = sequence
+        data["alt_vehicles_text"] = alt_vehicles_text
+
+        # build prompt w the FOLLOWUP_USER_PROMPT
+        user_prompt = FOLLOWUP_USER_PROMPT.format(**data)
+        prompts = self._get_default_message()
+        prompts.append({"role": "user", "content": user_prompt})
+        
+        # rest of this is the same as a usual reply
+        resp = self.chat(prompts)
+        raw_output = resp.output_text.strip()
+        
+        subject, body = self._process_response(raw_output)
+        subject, email_content = self._build_email_content(customer, subject, body)
+        
+        msg_id = make_msgid()
+        EmailFactory.get_provider("gmail").send(customer["lead"]["email"], subject, email_content, msg_id=msg_id)
+        
+        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
+        self._store_message(id_context, resp.id, msg_id, "assistant", raw_body, subject)
+        
     # helper to if we need to followup 
     # check if conv status is still active or not
     # check who sent the last message -
@@ -211,250 +450,3 @@ class Assistant(GPTClient):
             logging.error(f"Error checking follow-up status: {e}")
             # default to False (don't send) to prevent spamming on DB errors
             return False
-    
-    # helper to pull the data back out of Cosmos to hydrate the prompt context for the follow-up sequence 
-    # since it runs independently of the reply chain and won't have the previous responseId to pull context from
-    def _hydrate_customer_context(self, conversation_id: str) -> dict:
-        # grab a message to get the linking IDs
-        msgs = self.db.query_items_from_default_container(
-            "SELECT TOP 1 * FROM c WHERE c.conversationId = @id", 
-            [{"name": "@id", "value": conversation_id}]
-        )
-        if not msgs: return None
-        
-        lead_id, vehicle_id, dealer_id = msgs[0]["leadId"], msgs[0]["vehicleId"], msgs[0]["dealerId"]
-        
-        # fetch entities
-        lead = self.db.query_items_from_container("leads", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":lead_id}])
-        vehicle = self.db.query_items_from_container("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did", [{"name":"@id","value":vehicle_id}, {"name":"@did","value":dealer_id}])
-        dealer = self.db.query_items_from_container("dealerships", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":dealer_id}])
-        
-        return {
-            "conversationId": conversation_id,
-            "lead": lead[0] if lead else {},
-            "vehicle": vehicle[0] if vehicle else {},
-            "dealership": dealer[0] if dealer else {}
-        }
-    # def _get_email_history(self, conversation_id: str):
-    #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
-    #     params = [{"name": "@conversationId", "value": conversation_id}]
-    #     items = CosmosDBClient().query_items_from_default_container(query, params)
-    #     messages = []
-    #     for item in items:
-    #         body = (
-    #             "Customer Reply: " + item["body"]
-    #             if item["role"] == "user"
-    #             else item["body"]
-    #         )
-    #         messages.append({"role": item["role"], "content": body})
-    #     return messages
-    
-# ------------- MAIN FUNCTIONALITY -------------
-
-    # for initial contact from lead form intake
-    def contact(self, customer: dict):
-        # get data dictionary
-        data = self._get_formatting_data(customer)
-        
-        # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(data["lead_notes"])
-        logging.warning(f"Analysis results: {analysis_results}")
-        if self._escalation_check(json.dumps(analysis_results), data["customer_email"], data["refId"]):
-            return  # skip send and store if escalation needed based on analysis
-
-        # build prompt with context
-        user_prompt = CONTACT_USER_PROMPT.format(**data)
-        prompts = self._get_default_message()
-        prompts.append({"role": "user", "content": user_prompt})
-        
-        # generate content with AI
-        resp = self.chat(prompts)
-        raw_output = resp.output_text.strip()
-
-        # check for escalation before processing
-        if self._escalation_check(raw_output, data['customer_email'], data["refId"]):
-            return  # skip send and store
-
-        # store response_id in the message doc for chaining
-        response_id = resp.id
-
-        # build email content
-        subject, body = self._process_response(raw_output)
-        subject, email_content = self._build_email_content(customer, subject, body)
-        
-        # call send
-        msg_id = make_msgid()
-        to = customer["lead"]["email"]
-        EmailFactory.get_provider("gmail").send(
-            to, subject, email_content, msg_id=msg_id
-        )
-
-        # store to db
-        context = {
-            "conversationId": customer["conversationId"],
-            "leadId": customer["lead"]["id"],
-            "vehicleId": customer["vehicle"]["id"],
-            "dealerId": customer["dealership"]["id"],
-        }
-        
-        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
-        
-        self._store_message(
-            context, response_id, msg_id, "assistant", raw_body, subject
-        )
-
-    # for subsequent replies from lead; main additions is using previous context by responseId when calling .chat()
-    def reply(self, received_email):
-        
-        # query for previous message to get id fields and responseId for chaining
-        previous_response_id = None
-        context = {}
-        in_reply_to = received_email.get("in_reply_to", "")
-        if in_reply_to:
-            msgs = self.db.query_items_from_default_container(
-                "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'",
-                [{"name": "@msgId", "value": in_reply_to}],
-            )
-            if msgs:
-                previous_response_id = msgs[0].get("responseId")
-                context = {
-                    "conversationId": msgs[0].get("conversationId", ""),
-                    "leadId": msgs[0].get("leadId", ""),
-                    "vehicleId": msgs[0].get("vehicleId", ""),
-                    "dealerId": msgs[0].get("dealerId", ""),
-                }
-        # fallback to DB lookup if context not resolved from chain
-        if not context:
-            logging.warning(
-                f"No chain found for in_reply_to: {in_reply_to}, falling back to DB lookup"
-            )
-            context = self._resolve_context_from_sender(received_email["sender"])
-            if not context:
-                logging.error(
-                    f"DB context resolution failed for sender: {received_email['sender']}. Reply aborted."
-                )
-                return
-
-        # remove both html and previous quoted replies to get clean message body for analysis and response generation
-        stripped_body = self._strip_html(received_email["body"])
-        stripped_body = self._strip_quoted_reply(stripped_body)
-        
-        # store the received message in DB for history
-        self._store_message(
-            context,
-            previous_response_id,
-            received_email["message_id"],
-            "user",
-            stripped_body,
-            received_email["subject"],
-        )
-        
-        # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(stripped_body)
-        logging.warning(f"Analysis results: {analysis_results}")
-        if self._escalation_check(json.dumps(analysis_results), received_email["sender"], context["conversationId"]):
-            return  # skip send and store if escalation needed based on analysis
-
-        # build prompt with context
-        prompts = self._get_default_message()
-        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body)
-        prompts.append({"role": "user", "content": user_prompt})
-
-        # generate content with AI
-        resp = self.chat(prompts, previous_response_id=previous_response_id)
-        raw_output = resp.output_text.strip()
-        
-        # check for escalation before processing
-        if self._escalation_check(raw_output, received_email["sender"], context["conversationId"]):
-            return  # skip send and store
-
-        # store response_id in the message doc for chaining
-        response_id = resp.id
-
-        # build email content
-        subject, body = self._process_response(raw_output)
-        email_content = build_email_template(body)
-        
-        # call reply
-        msg_id = make_msgid()
-        EmailFactory.get_provider("gmail").reply(
-            received_email["sender"],
-            received_email["message_id"],
-            received_email["subject"],
-            email_content,
-            msg_id=msg_id,
-        )
-        
-        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
-        
-        # store to db
-        self._store_message(
-            context, response_id, msg_id, "assistant", raw_body, subject
-        )
-        
-        return context.get("conversationId", "")
-
-    # for followup sequence, which is similar to reply but with added logic to check for alternatives 
-    # in the 2nd follow-up and inject that into the prompt
-    def follow_up(self, conversation_id: str, sequence: int):
-        customer = self._hydrate_customer_context(conversation_id)
-        if not customer: 
-            return
-        
-        # check if the vehicle has been sold (status == 0)
-        # if sold, abort the follow-up sequence and close the conversation
-        if customer["vehicle"].get("status") == 0:
-            logging.info(f"Vehicle {customer['vehicle']['id']} sold. Aborting follow-up.")
-            self._set_conversation_status(conversation_id, 0) # mark conversation inactive
-            return
-
-        data = self._get_formatting_data(customer)
-        
-        # only suggest alt vehicles in 2nd followup and only if the lead hasn't replied yet
-        alt_vehicles_text = "No alternatives required for this sequence."
-        if sequence == 2:
-            dealer_id = customer["dealership"]["id"]
-            vehicle_id = customer["vehicle"]["id"]
-            
-            alt_vehicles = self.db.query_items_from_container(
-                "vehicles",
-                "SELECT TOP 3 * FROM c WHERE c.dealerId = @did AND c.id != @vid AND c.status = 1",
-                [{"name": "@did", "value": dealer_id},
-                 {"name": "@vid", "value": vehicle_id}]
-            )
-            
-            if alt_vehicles:
-                alt_vehicles_text = ""
-                for v in alt_vehicles:
-                    alt_vehicles_text += f"- {v.get('year')} {v.get('make')} {v.get('model')} ({v.get('trim', 'Base')})\n"
-            else:
-                alt_vehicles_text = "No direct alternative vehicles currently available in stock."
-
-        # add sequence and alternatives into the data dictionary for the prompt formatter
-        data["sequence"] = sequence
-        data["alt_vehicles_text"] = alt_vehicles_text
-
-        # build prompt w the FOLLOWUP_USER_PROMPT
-        user_prompt = FOLLOWUP_USER_PROMPT.format(**data)
-        prompts = self._get_default_message()
-        prompts.append({"role": "user", "content": user_prompt})
-        
-        # rest of this is the same as a usual reply
-        resp = self.chat(prompts)
-        raw_output = resp.output_text.strip()
-        
-        subject, body = self._process_response(raw_output)
-        subject, email_content = self._build_email_content(customer, subject, body)
-        
-        msg_id = make_msgid()
-        EmailFactory.get_provider("gmail").send(customer["lead"]["email"], subject, email_content, msg_id=msg_id)
-        
-        context = {
-            "conversationId": conversation_id, 
-            "leadId": customer["lead"]["id"],
-            "vehicleId": customer["vehicle"]["id"], 
-            "dealerId": customer["dealership"]["id"]
-        }
-        
-        raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
-        self._store_message(context, resp.id, msg_id, "assistant", raw_body, subject)
