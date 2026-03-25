@@ -24,7 +24,7 @@ myApp = df.DFApp(http_auth_level=func.AuthLevel.ANONYMOUS)
     connection="AzureWebJobsServiceBus"
 )
 @myApp.durable_client_input(client_name="client")
-async def sb_trigger(msg: func.ServiceBusMessage,
+async def lead_intake_sb_trigger(msg: func.ServiceBusMessage,
     client: df.DurableOrchestrationClient):
     data = json.loads(msg.get_body())
     logging.info(f"New message: {data} ")
@@ -52,7 +52,7 @@ def contact_email_orchestrator(context):
         "vehicleId": input_data["vehicle"]["id"],
         "dealerId": input_data["dealership"]["id"]
     }
-    yield context.call_sub_orchestrator("followup_sequence_orchestrator", id_context)
+    yield context.call_sub_orchestrator("followup_orchestrator", id_context)
 
 
 @myApp.activity_trigger(input_name="inputData")
@@ -96,7 +96,7 @@ def reply_email_orchestrator(context: df.DurableOrchestrationContext):
     if id_contexts_list:
         unique_contexts = {ctx["conversationId"]: ctx for ctx in id_contexts_list}.values()
         followup_tasks = [
-            context.call_sub_orchestrator("followup_sequence_orchestrator", ctx) 
+            context.call_sub_orchestrator("followup_orchestrator", ctx) 
             for ctx in unique_contexts
         ]
         yield context.task_all(followup_tasks)
@@ -128,7 +128,7 @@ def send_reply_email_activity(email):
 # ------
 
 @myApp.orchestration_trigger(context_name="context")
-def followup_sequence_orchestrator(context: df.DurableOrchestrationContext):
+def followup_orchestrator(context: df.DurableOrchestrationContext):
     id_context = context.get_input()
     if not id_context or not isinstance(id_context, dict):
         return
@@ -142,29 +142,28 @@ def followup_sequence_orchestrator(context: df.DurableOrchestrationContext):
         next_wakeup = context.current_utc_datetime + timedelta(**{TIME_STRUCTURE: hours})
         yield context.create_timer(next_wakeup)
 
-        # pass the conversation id and the start time to the checker
-        check_payload = {
-            "convId": conversation_id, 
+        # build the combined payload
+        payload = {
+            "id_context": id_context, 
+            "sequence": sequence_index + 1,
             "startTime": sequence_start_time
         }
-        needs_followup = yield context.call_activity("check_needs_followup_activity", check_payload)
         
-        if not needs_followup:
-            logging.info(f"User replied to {conversation_id}. Ending follow-up sequence.")
-            break 
-
-        payload = {"id_context": id_context, "sequence": sequence_index + 1}
-        yield context.call_activity("send_followup_activity", payload)
-
+        # call the single merged activity
+        sequence_continues = yield context.call_activity("send_followup_email_activity", payload)
+        
+        # if the activity decided it shouldn't send (user replied or inactive), break the loop
+        if not sequence_continues:
+            logging.info(f"Sequence aborted for {conversation_id}.")
+            break
+        
 @myApp.activity_trigger(input_name="payload")
-def check_needs_followup_activity(payload: dict) -> bool:
-    # update the activity to accept the new payload
-    return Assistant().needs_followup(payload["convId"], payload["startTime"])
-
-@myApp.activity_trigger(input_name="payload")
-def send_followup_activity(payload: dict):
-    Assistant().follow_up(payload["id_context"], payload["sequence"])
-    return True
+def send_followup_email_activity(payload: dict):
+    return Assistant().follow_up(
+        payload["id_context"], 
+        payload["sequence"], 
+        payload["startTime"]
+    )
 
 # 2. ACS: Webhook reception (called by Logic App)
 # @myApp.route(route="webhook/acs", methods=["POST"])

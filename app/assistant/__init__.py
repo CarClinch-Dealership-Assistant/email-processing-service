@@ -161,14 +161,20 @@ class Assistant(GPTClient):
     def _escalation_check(self, output, email, conversationId):
         try:
             parsed = json.loads(output)
+            
+            # check for standard escalation
             if parsed.get("escalate") is True:
                 logging.warning(
-                    f"Email skipped; escalation detected. Reason: {parsed.get('intentCategory') }| Sender: {email}"
+                    f"Email skipped; escalation detected. Reason: {parsed['intentCategory']} | Sender: {email}"
                 )
+                # Mark the conversation as inactive (0) to kill any running durable timers
                 self._set_conversation_status(conversationId, status=0)
                 return True
+                
+            return False
+            
         except (json.JSONDecodeError, AttributeError):
-            return False  # not an escalation response, proceed normally
+            return False   # not an escalation response, proceed normally
     
     # helper to pull the data back out of Cosmos to hydrate the prompt context for the follow-up sequence 
     # since it runs independently of the reply chain and won't have the previous responseId to pull id_context from
@@ -348,9 +354,25 @@ class Assistant(GPTClient):
 
     # for followup sequence, which is similar to reply but with added logic to check for alternatives 
     # in the 2nd follow-up and inject that into the prompt
-    def follow_up(self, id_context: dict, sequence: int):
+    def follow_up(self, id_context: dict, sequence: int, start_time: str):
         logging.info(f"Starting follow-up sequence {sequence} for conversation {id_context.get('conversationId')}")
         conversation_id = id_context.get("conversationId")
+        
+        # is conversation active still
+        conv_query = "SELECT * FROM c WHERE c.id = @id"
+        convs = self.db.query_items_from_container("conversations", conv_query, [{"name": "@id", "value": conversation_id}])
+        if not convs or convs[0].get("status") == 0:
+            logging.info(f"Conversation {conversation_id} inactive. Aborting follow-up.")
+            return False
+        
+        # did user reply yet
+        reply_query = "SELECT VALUE COUNT(1) FROM c WHERE c.conversationId = @convId AND c.role = 'user' AND c.timestamp > @startTime"
+        params = [{"name": "@convId", "value": conversation_id}, {"name": "@startTime", "value": start_time}]
+        reply_count = self.db.query_items_from_default_container(reply_query, params)
+        if reply_count and reply_count[0] > 0:
+            logging.info(f"User replied to {conversation_id}. Aborting follow-up.")
+            return False
+        
         customer = self._hydrate_customer_context(id_context)
         
         # ensure hydration found records
@@ -409,44 +431,5 @@ class Assistant(GPTClient):
         raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
         self._store_message(id_context, resp.id, msg_id, "assistant", raw_body, subject)
         
-    # helper to if we need to followup 
-    # check if conv status is still active or not
-    # check who sent the last message -
-    # if the LAST message in the thread is from the user, they replied
-    # if its from us, they ignored us and we need to follow up
-    def needs_followup(self, conversation_id: str, start_time: str) -> bool:
-        # is the conversation still active?
-        conv_query = "SELECT * FROM c WHERE c.id = @id"
-        convs = self.db.query_items_from_container(
-            "conversations", 
-            conv_query, 
-            [{"name": "@id", "value": conversation_id}]
-        )
-        
-        # if the conversation doesn't exist or its status is 0 (inactive), stop the timer.
-        if not convs or convs[0].get("status") == 0:
-            logging.info(f"Conversation {conversation_id} is inactive or missing. Aborting follow-up.")
-            return False
-        
-        query = """
-            SELECT VALUE COUNT(1) 
-            FROM c 
-            WHERE c.conversationId = @convId 
-              AND c.role = 'user' 
-              AND c.timestamp > @startTime
-        """
-        params = [
-            {"name": "@convId", "value": conversation_id},
-            {"name": "@startTime", "value": start_time}
-        ]
-        
-        try:
-            result = self.db.query_items_from_default_container(query, params)
-            count = result[0] if result else 0
-            
-            # if count is 0, they haven't replied, so we need to follow up.
-            return count == 0
-        except Exception as e:
-            logging.error(f"Error checking follow-up status: {e}")
-            # default to False (don't send) to prevent spamming on DB errors
-            return False
+        return True
+    
