@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from app.database.cosmos import CosmosDBClient
 from app.email.factory import EmailFactory
 from app.assistant.gpt import GPTClient
-from app.assistant.template import build_email_template
+from app.assistant.template import build_email_template, build_escalation_email_template, build_ack_email_template
 from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.assistant.analysis import Analysis
 
@@ -62,12 +62,12 @@ class Assistant(GPTClient):
             else " | ".join([n["text"] for n in notes if n.get("text")])
         )
 
-        address = dealership["address1"]
+        address = dealership.get("address1", "")
         if dealership.get("address2"):
             address += ", " + dealership["address2"]
             
         data = {
-            "refId": customer["conversationId"],
+            "conversationId": customer["conversationId"],
             "customer_name": lead["fname"],
             "customer_email": lead["email"],
             "vehicle_year": vehicle["year"],
@@ -157,24 +157,37 @@ class Assistant(GPTClient):
         body = parts[1] if len(parts) > 1 else ""
         body = body.replace("\r\n", "<br />").replace("\n", "<br />")
         return (subject, body)
-    
-    def _escalation_check(self, output, email, conversationId):
+
+    def _escalation_check(self, output, customer_email: str, id_context: dict) -> bool:
         try:
-            parsed = json.loads(output)
-            
-            # check for standard escalation
-            if parsed.get("escalate") is True:
-                logging.warning(
-                    f"Email skipped; escalation detected. Reason: {parsed['intentCategory']} | Sender: {email}"
-                )
-                # Mark the conversation as inactive (0) to kill any running durable timers
-                self._set_conversation_status(conversationId, status=0)
-                return True
-                
+            parsed = output if isinstance(output, dict) else json.loads(output)
+        except (json.JSONDecodeError, TypeError):
             return False
+
+        # check for not escalation
+        if not parsed.get("escalate"):
+            return False
+
+        self.escalate(parsed, customer_email, id_context)
+        return True
+    
+    # def _escalation_check(self, output, email, conversationId):
+    #     try:
+    #         parsed = json.loads(output)
             
-        except (json.JSONDecodeError, AttributeError):
-            return False   # not an escalation response, proceed normally
+    #         # check for standard escalation
+    #         if parsed.get("escalate") is True:
+    #             logging.warning(
+    #                 f"Email skipped; escalation detected. Reason: {parsed['intentCategory']} | Sender: {email}"
+    #             )
+    #             # Mark the conversation as inactive (0) to kill any running durable timers
+    #             self._set_conversation_status(conversationId, status=0)
+    #             return True
+                
+    #         return False
+            
+    #     except (json.JSONDecodeError, AttributeError):
+    #         return False   # not an escalation response, proceed normally
     
     # helper to pull the data back out of Cosmos to hydrate the prompt context for the follow-up sequence 
     # since it runs independently of the reply chain and won't have the previous responseId to pull id_context from
@@ -193,31 +206,25 @@ class Assistant(GPTClient):
             "vehicle": vehicle[0] if vehicle else {},
             "dealership": dealer[0] if dealer else {}
         }
-    # def _get_email_history(self, conversation_id: str):
-    #     query = "SELECT * FROM c WHERE c.conversationId = @conversationId ORDER BY c.timestamp ASC"
-    #     params = [{"name": "@conversationId", "value": conversation_id}]
-    #     items = CosmosDBClient().query_items_from_default_container(query, params)
-    #     messages = []
-    #     for item in items:
-    #         body = (
-    #             "Customer Reply: " + item["body"]
-    #             if item["role"] == "user"
-    #             else item["body"]
-    #         )
-    #         messages.append({"role": item["role"], "content": body})
-    #     return messages
-    
+        
 # ------------- MAIN METHODS -------------
 
     # for initial contact from lead form intake
     def contact(self, customer: dict):
         # get data dictionary
         data = self._get_formatting_data(customer)
+        id_context = {
+            "conversationId": customer["conversationId"],
+            "leadId": customer["lead"]["id"],
+            "vehicleId": customer["vehicle"]["id"],
+            "dealerId": customer["dealership"]["id"],
+        }
         
         # FIRST: analyze the lead notes
         analysis_results = Analysis().analyze(data["lead_notes"])
         logging.warning(f"Analysis results: {analysis_results}")
-        if self._escalation_check(json.dumps(analysis_results), data["customer_email"], data["refId"]):
+    
+        if self._escalation_check(json.dumps(analysis_results), data["customer_email"], id_context):
             return  # skip send and store if escalation needed based on analysis
 
         # build prompt with context
@@ -230,7 +237,7 @@ class Assistant(GPTClient):
         raw_output = resp.output_text.strip()
 
         # check for escalation before processing
-        if self._escalation_check(raw_output, data['customer_email'], data["refId"]):
+        if self._escalation_check(raw_output, data['customer_email'], id_context):
             return  # skip send and store
 
         # store response_id in the message doc for chaining
@@ -248,13 +255,6 @@ class Assistant(GPTClient):
         )
 
         # store to db
-        id_context = {
-            "conversationId": customer["conversationId"],
-            "leadId": customer["lead"]["id"],
-            "vehicleId": customer["vehicle"]["id"],
-            "dealerId": customer["dealership"]["id"],
-        }
-        
         raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
         
         self._store_message(
@@ -310,7 +310,7 @@ class Assistant(GPTClient):
         # FIRST: analyze the lead notes
         analysis_results = Analysis().analyze(stripped_body)
         logging.warning(f"Analysis results: {analysis_results}")
-        if self._escalation_check(json.dumps(analysis_results), received_email["sender"], id_context["conversationId"]):
+        if self._escalation_check(json.dumps(analysis_results), received_email["sender"], id_context):
             return  # skip send and store if escalation needed based on analysis
 
         # build prompt with context
@@ -323,7 +323,7 @@ class Assistant(GPTClient):
         raw_output = resp.output_text.strip()
         
         # check for escalation before processing
-        if self._escalation_check(raw_output, received_email["sender"], id_context["conversationId"]):
+        if self._escalation_check(raw_output, received_email["sender"], id_context):
             return  # skip send and store
 
         # store response_id in the message doc for chaining
@@ -380,9 +380,9 @@ class Assistant(GPTClient):
             logging.error(f"Failed to hydrate id_context for {conversation_id}")
             return
         
-        # check if the vehicle has been sold (status == 0)
+        # check if the vehicle has been sold (status == 2)
         # if sold, abort the follow-up sequence and close the conversation
-        if customer["vehicle"].get("status") == 0:
+        if customer["vehicle"].get("status") == 2:
             logging.info(f"Vehicle {customer['vehicle']['id']} sold. Aborting follow-up.")
             self._set_conversation_status(conversation_id, 0) # mark conversation inactive
             return
@@ -433,3 +433,72 @@ class Assistant(GPTClient):
         
         return True
     
+    # for escalation; log it, close convo, email the dealership with the full thread, and ack the customer
+    def escalate(self, parsed: dict, customer_email: str, id_context: dict):
+        conversation_id = id_context.get("conversationId", "")
+        category = parsed.get("intentCategory", "unknown")
+        logging.warning(f"Escalation triggered - {category} | Sender: {customer_email}")
+
+        # store a durable escalation record
+        self._store_message(
+            id_context, None, None, "system",
+            json.dumps(parsed),
+            f"[ESCALATION] {category}",
+        )
+
+        # close the conversation to halt any running follow-up timers
+        self._set_conversation_status(conversation_id, status=0)
+
+        # fetch full thread for the dealership email
+        messages = self.db.query_items_from_default_container(
+            "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC",
+            [{"name": "@convId", "value": conversation_id}],
+        )
+        
+        # fetch the lead notes, the intake notes
+        lead_id = id_context.get("leadId")
+        if lead_id:
+            query = "SELECT VALUE c.notes[ARRAY_LENGTH(c.notes) - 1] FROM c WHERE c.id = @id"
+            params = [{"name": "@id", "value": lead_id}]
+            
+            last_note_results = self.db.query_items_from_container("leads", query, params)
+            
+            # last_note_results will be a list containing the single last note object
+            last_note = last_note_results[0] if last_note_results else None
+        else:
+            last_note = None
+
+        if not messages and not last_note:
+            logging.warning(f"No messages found for conversation {conversation_id}; skipping dealership email.")
+        else:
+            # resolve dealership contact from the first message's dealerId
+            dealer_id = messages[0].get("dealerId")
+            dealers = self.db.query_items_from_container(
+                "dealerships",
+                "SELECT * FROM c WHERE c.id = @id",
+                [{"name": "@id", "value": dealer_id}],
+            ) if dealer_id else []
+
+            if not dealers:
+                logging.error(f"Dealership not found for id {dealer_id}; skipping dealership email.")
+            else:
+                dealership_email = dealers[0].get("email")
+                if not dealership_email:
+                    logging.error(f"No email on dealership record {dealer_id}.")
+                else:
+                    subject, email_html = build_escalation_email_template(
+                        conversation_id, customer_email, parsed, messages, last_note
+                    )
+                    EmailFactory.get_provider("gmail").send(
+                        dealership_email, subject, email_html, msg_id=make_msgid()
+                    )
+                    logging.info(f"Escalation email sent to {dealership_email}.")
+
+        # acknowledge the customer so they are not left waiting
+        EmailFactory.get_provider("gmail").send(
+            customer_email,
+            "We've received your message",
+            build_ack_email_template(),
+            msg_id=make_msgid(),
+        )
+        logging.info(f"Customer ack sent to {customer_email}.")

@@ -71,7 +71,7 @@ Write the first outreach email to this lead. Follow the system prompt rules exac
 # INSTRUCTIONS
 1. Check the lead inquiry against the escalation table in the system prompt. If it matches, respond with the corresponding JSON object only.
 2. Otherwise, write the email using the lead inquiry as your primary guide for the email body.
-3. Use this exact subject line: "Re: Your interest in the {vehicle_year} {vehicle_make} {vehicle_model} [ref: {refId}]"
+3. Use this exact subject line: "Re: Your interest in the {vehicle_year} {vehicle_make} {vehicle_model} [ref: {conversationId}]"
 4. Close with this exact signature block:
    The Team at {dealership_name}
    {dealership_phone} | {dealership_email}
@@ -156,7 +156,7 @@ Adapt your tone and message based on the Follow-up Sequence Number:
 - If Sequence is 3: Write a final, low-pressure check-in. Ask if they are still in the market or have already purchased a vehicle. [STUB] Include a brief prompt encouraging them to book a test drive if they are still looking.
 
 # FORMAT INSTRUCTIONS
-1. Use this exact subject line: "Re: Your interest in the {vehicle_year} {vehicle_make} {vehicle_model} [ref: {refId}]"
+1. Use this exact subject line: "Re: Your interest in the {vehicle_year} {vehicle_make} {vehicle_model} [ref: {conversationId}]"
 2. Close with this exact signature block:
    The Team at {dealership_name}
    {dealership_phone} | {dealership_email}
