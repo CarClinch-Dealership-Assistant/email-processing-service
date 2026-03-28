@@ -471,8 +471,11 @@ class Assistant(GPTClient):
         if not messages and not last_note:
             logging.warning(f"No messages found for conversation {conversation_id}; skipping dealership email.")
         else:
-            # resolve dealership contact from the first message's dealerId
-            dealer_id = messages[0].get("dealerId")
+            dealer_id = id_context.get("dealerId")
+            
+            if not dealer_id and messages:
+                dealer_id = messages[0].get("dealerId")
+
             dealers = self.db.query_items_from_container(
                 "dealerships",
                 "SELECT * FROM c WHERE c.id = @id",

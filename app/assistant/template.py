@@ -85,13 +85,13 @@ escalation_content = """
 
 thread_row_content = """
 <tr>
-  <td style="padding:12px 16px;border-bottom:1px solid #e8e5de;background:{bg};">
-    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-      <span style="font-weight:600;color:{label_color};font-size:13px;">{role}</span>
-      <span style="font-size:12px;color:#888;">{timestamp}</span>
+  <td style="padding:16px;background:{bg};border-bottom:1px solid #e0ddd6;">
+    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+      <span style="font-weight:bold;color:{label_color};font-size:13px;text-transform:uppercase;">{role}</span>
+      <span style="font-size:12px;color:#999;">{timestamp}</span>
     </div>
     {subject_line_html}
-    <div style="font-size:14px;color:#333;white-space:pre-wrap;">{body}</div>
+    <div style="font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;">{body}</div>
   </td>
 </tr>
 """
@@ -124,7 +124,7 @@ ack_content = """
 </html>
 """
 
-def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list, last_note) -> tuple[str, str]:
+def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list, last_note: dict) -> tuple[str, str]:
     import html as html_lib
 
     intent_category = parsed.get("intentCategory", "Unknown")
@@ -132,6 +132,20 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
     parsed_block = "<br/>".join(f"<strong>{k}:</strong> {v}" for k, v in parsed.items())
 
     thread_rows = ""
+
+    if last_note:
+        note_text = html_lib.escape(last_note.get("text", "").strip())
+        note_ts = last_note.get("timestamp", "")
+        
+        thread_rows += thread_row_content.format(
+            bg="#f0f0f0",  # Neutral gray for system/form intake
+            label_color="#555",
+            role="Form Submission",
+            timestamp=note_ts,
+            subject_line_html="<div style='font-size:12px;color:#888;margin-bottom:4px;'>Source: Website Lead Form</div>",
+            body=note_text,
+        )
+
     for msg in messages:
         role = msg.get("role", "unknown").capitalize()
         timestamp = msg.get("timestamp", "")
@@ -140,6 +154,7 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
 
         bg = "#f9f3ee" if role == "Assistant" else "#f0f4fb"
         label_color = "#7a3c1e" if role == "Assistant" else "#1a3a6b"
+        
         subject_line_html = (
             f"<div style='font-size:12px;color:#666;margin-bottom:4px;'>Subject: {subject_line}</div>"
             if subject_line else ""
@@ -163,7 +178,7 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
         thread_rows=thread_rows,
     )
 
-    subject = f"[Escalation] Conversation {conversation_id} — {intent_category} — Action Required"
+    subject = f"[Escalation] {intent_category} — {customer_email} — ID: {conversation_id[-6:]}"
     return subject, email_html
 
 
