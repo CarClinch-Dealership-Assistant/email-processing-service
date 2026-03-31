@@ -1,5 +1,3 @@
-from email.utils import parseaddr
-from app.database.cosmos import CosmosDBClient
 import azure.functions as func
 import azure.durable_functions as df
 from dataclasses import asdict

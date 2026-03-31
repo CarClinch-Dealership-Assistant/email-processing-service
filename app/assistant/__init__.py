@@ -37,7 +37,7 @@ class Assistant(GPTClient):
             "subject": subject,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.db.save_message_to_default_container(message_doc)
+        self.db.save_message(message_doc)
         logging.info(f"Stored message: {doc_id}")
         return doc_id
 
@@ -116,7 +116,7 @@ class Assistant(GPTClient):
     # but there is no chain match based on responseId
     def _resolve_context_from_sender(self, sender: str):
         _, sender_email = parseaddr(sender)
-        leads = self.db.query_items_from_container(
+        leads = self.db.query_items(
             "leads",
             "SELECT * FROM c WHERE c.email = @email",
             [{"name": "@email", "value": sender_email.lower()}],
@@ -125,7 +125,7 @@ class Assistant(GPTClient):
             logging.warning(f"No lead found for sender: {sender_email}")
             return None
         lead = leads[0]
-        conversations = self.db.query_items_from_container(
+        conversations = self.db.query_items(
             "conversations",
             "SELECT * FROM c WHERE c.leadId = @leadId AND c.status = 1 ORDER BY c.timestamp DESC OFFSET 0 LIMIT 1",
             [{"name": "@leadId", "value": lead["id"]}],
@@ -183,7 +183,8 @@ class Assistant(GPTClient):
         self._set_conversation_status(conversation_id, status=0)
 
         # fetch full thread for the dealership email
-        messages = self.db.query_items_from_default_container(
+        messages = self.db.query_items(
+            "messages",
             "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC",
             [{"name": "@convId", "value": conversation_id}],
         )
@@ -191,7 +192,7 @@ class Assistant(GPTClient):
         # fetch the lead notes, the intake notes
         lead_id = id_context.get("leadId")
         if lead_id:
-            last_note_results = self.db.query_items_from_container(
+            last_note_results = self.db.query_items(
                 "leads",
                 "SELECT VALUE c.notes[ARRAY_LENGTH(c.notes) - 1] FROM c WHERE c.id = @id",
                 [{"name": "@id", "value": lead_id}],
@@ -205,7 +206,7 @@ class Assistant(GPTClient):
             logging.warning(f"No messages found for conversation {conversation_id}; skipping dealership email.")
         else:
             dealer_id = id_context.get("dealerId") or (messages[0].get("dealerId") if messages else None)
-            dealers = self.db.query_items_from_container(
+            dealers = self.db.query_items(
                 "dealerships",
                 "SELECT * FROM c WHERE c.id = @id",
                 [{"name": "@id", "value": dealer_id}],
@@ -243,9 +244,9 @@ class Assistant(GPTClient):
         vehicle_id = id_context["vehicleId"]
         dealer_id = id_context["dealerId"]
         
-        lead = self.db.query_items_from_container("leads", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":lead_id}])
-        vehicle = self.db.query_items_from_container("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did", [{"name":"@id","value":vehicle_id}, {"name":"@did","value":dealer_id}])
-        dealer = self.db.query_items_from_container("dealerships", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":dealer_id}])
+        lead = self.db.query_items("leads", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":lead_id}])
+        vehicle = self.db.query_items("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did", [{"name":"@id","value":vehicle_id}, {"name":"@did","value":dealer_id}])
+        dealer = self.db.query_items("dealerships", "SELECT * FROM c WHERE c.id=@id", [{"name":"@id","value":dealer_id}])
         
         return {
             "conversationId": id_context["conversationId"],
@@ -316,7 +317,8 @@ class Assistant(GPTClient):
         id_context = {}
         in_reply_to = received_email.get("in_reply_to", "")
         if in_reply_to:
-            msgs = self.db.query_items_from_default_container(
+            msgs = self.db.query_items(
+                "messages",
                 "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'",
                 [{"name": "@msgId", "value": in_reply_to}],
             )
@@ -407,7 +409,7 @@ class Assistant(GPTClient):
         
         # is conversation active still
         conv_query = "SELECT * FROM c WHERE c.id = @id"
-        convs = self.db.query_items_from_container("conversations", conv_query, [{"name": "@id", "value": conversation_id}])
+        convs = self.db.query_items("conversations", conv_query, [{"name": "@id", "value": conversation_id}])
         if not convs or convs[0].get("status") == 0:
             logging.info(f"Conversation {conversation_id} inactive. Aborting follow-up.")
             return False
@@ -415,7 +417,7 @@ class Assistant(GPTClient):
         # did user reply yet
         reply_query = "SELECT VALUE COUNT(1) FROM c WHERE c.conversationId = @convId AND c.role = 'user' AND c.timestamp > @startTime"
         params = [{"name": "@convId", "value": conversation_id}, {"name": "@startTime", "value": start_time}]
-        reply_count = self.db.query_items_from_default_container(reply_query, params)
+        reply_count = self.db.query_items("messages", reply_query, params)
         if reply_count and reply_count[0] > 0:
             logging.info(f"User replied to {conversation_id}. Aborting follow-up.")
             return False
@@ -442,7 +444,7 @@ class Assistant(GPTClient):
             dealer_id = id_context["dealerId"]
             vehicle_id = id_context["vehicleId"]
             
-            alt_vehicles = self.db.query_items_from_container(
+            alt_vehicles = self.db.query_items(
                 "vehicles",
                 "SELECT TOP 3 * FROM c WHERE c.dealerId = @did AND c.id != @vid AND c.status = 1",
                 [{"name": "@did", "value": dealer_id},
