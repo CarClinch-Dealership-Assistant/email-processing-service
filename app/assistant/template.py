@@ -1,3 +1,4 @@
+import html as html_lib
 
 content = """
 <!DOCTYPE html>
@@ -125,8 +126,6 @@ ack_content = """
 """
 
 def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list, last_note: dict) -> tuple[str, str]:
-    import html as html_lib
-
     intent_category = parsed.get("intentCategory", "Unknown")
     escalation_reason = parsed.get("reason", parsed.get("summary", "No reason provided"))
     parsed_block = "<br/>".join(f"<strong>{k}:</strong> {v}" for k, v in parsed.items())
@@ -185,8 +184,7 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
 def build_ack_email_template() -> str:
     return ack_content.format(
         message=(
-            "Thank you for your message. A member of our team will be reaching out "
-            "to you shortly to assist you further. We appreciate your patience!"
+            "Thank you for your message. A member of our team will be reaching out to you shortly to assist you further. We appreciate your patience!"
         )
     )
 
