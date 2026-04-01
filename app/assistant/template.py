@@ -88,7 +88,7 @@ thread_row_content = """
 <tr>
   <td style="padding:16px;background:{bg};border-bottom:1px solid #e0ddd6;">
     <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-weight:bold;color:{label_color};font-size:13px;text-transform:uppercase;">{role}</span>
+      <span style="font-weight:bold;color:{label_color};font-size:13px;text-transform:uppercase;">{role} </span>
       <span style="font-size:12px;color:#999;">{timestamp}</span>
     </div>
     {subject_line_html}
