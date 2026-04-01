@@ -188,21 +188,7 @@ class Assistant(GPTClient):
             "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC",
             [{"name": "@convId", "value": conversation_id}],
         )
-
-        # fetch the lead notes, the intake notes
-        lead_id = id_context.get("leadId")
-        if lead_id:
-            last_note_results = self.db.query_items(
-                "leads",
-                "SELECT VALUE c.notes[ARRAY_LENGTH(c.notes) - 1] FROM c WHERE c.id = @id",
-                [{"name": "@id", "value": lead_id}],
-            )
-            # last_note_results will be a list containing the single last note object
-            last_note = last_note_results[0] if last_note_results else None
-        else:
-            last_note = None
-
-        if not messages and not last_note:
+        if not messages:
             logging.warning(f"No messages found for conversation {conversation_id}; skipping dealership email.")
         else:
             dealer_id = id_context.get("dealerId") or (messages[0].get("dealerId") if messages else None)
@@ -220,7 +206,7 @@ class Assistant(GPTClient):
                     logging.error(f"No email on dealership record {dealer_id}.")
                 else:
                     subject, email_html = build_escalation_email_template(
-                        conversation_id, customer_email, parsed, messages, last_note
+                        conversation_id, customer_email, parsed, messages
                     )
                     EmailFactory.get_provider("gmail").send(
                         dealership_email, subject, email_html, msg_id=make_msgid()
@@ -268,8 +254,19 @@ class Assistant(GPTClient):
             "dealerId": customer["dealership"]["id"],
         }
         
+        lead_notes = data.get("lead_notes", "").strip()
+        if lead_notes:
+            self._store_message(
+                id_context, 
+                None,  # no response_id for a user submission
+                None,  # no msg_id since it originated from a web form
+                "user", 
+                lead_notes, 
+                "Form Submission"
+            )
+            
         # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(data["lead_notes"])
+        analysis_results = Analysis().analyze(lead_notes)
         logging.warning(f"Analysis results: {analysis_results}")
     
         if self._escalate(json.dumps(analysis_results), data["customer_email"], id_context):

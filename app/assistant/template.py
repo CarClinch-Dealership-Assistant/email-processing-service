@@ -125,25 +125,12 @@ ack_content = """
 </html>
 """
 
-def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list, last_note: dict) -> tuple[str, str]:
+def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list) -> tuple[str, str]:
     intent_category = parsed.get("intentCategory", "Unknown")
     escalation_reason = parsed.get("reason", parsed.get("summary", "No reason provided"))
     parsed_block = "<br/>".join(f"<strong>{k}:</strong> {v}" for k, v in parsed.items())
 
     thread_rows = ""
-
-    if last_note:
-        note_text = html_lib.escape(last_note.get("text", "").strip())
-        note_ts = last_note.get("timestamp", "")
-        
-        thread_rows += thread_row_content.format(
-            bg="#f0f0f0",  # Neutral gray for system/form intake
-            label_color="#555",
-            role="Form Submission",
-            timestamp=note_ts,
-            subject_line_html="<div style='font-size:12px;color:#888;margin-bottom:4px;'>Source: Website Lead Form</div>",
-            body=note_text,
-        )
 
     for msg in messages:
         role = msg.get("role", "unknown").capitalize()
