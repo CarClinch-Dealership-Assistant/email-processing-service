@@ -3,13 +3,14 @@ from operator import ge
 import re
 import uuid
 import logging
+from dateutil import parser
 from email.utils import make_msgid, parseaddr
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
 from app.database.cosmos import CosmosDBClient
 from app.email.factory import EmailFactory
 from app.assistant.gpt import GPTClient
-from app.assistant.template import build_email_template, build_escalation_email_template, build_ack_email_template
+from app.assistant.template import build_email_template, build_escalation_email_template, build_ack_email_template, build_confirmation_email_template, build_dealer_notification_template, build_date_table, build_time_table
 from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.assistant.analysis import Analysis
 
@@ -240,7 +241,184 @@ class Assistant(GPTClient):
             "vehicle": vehicle[0] if vehicle else {},
             "dealership": dealer[0] if dealer else {}
         }
+
+    def _get_available_timeslots(self, dealer_id: str, date_str: str) -> list[int]:
+        # sanitize the LLM's date output into strict YYYY-MM-DD
+        try:
+            parsed_date = parser.parse(date_str)
+            strict_date_str = parsed_date.strftime("%Y-%m-%d")
+        except ValueError:
+            logging.error(f"Could not parse date string from LLM: {date_str}")
+            return [] # fail safe if the LLM output absolute garbage
+
+        query = "SELECT * FROM c WHERE c.dealerId = @did AND c.appointmentDate = @date"
+        params = [
+            {"name": "@did", "value": dealer_id},
+            {"name": "@date", "value": strict_date_str} # Use the sanitized date here
+        ]
         
+        logging.warning(f"[DB QUERY] Looking for appts on {strict_date_str} for dealer {dealer_id}")
+
+        appointments = self.db.query_items("appointments", query, params) 
+        
+        booked_slots = [int(appt["timeslot"]) for appt in appointments]
+        all_slots = list(range(9, 18)) # 9 AM to 5 PM
+        return [slot for slot in all_slots if slot not in booked_slots]
+
+    def _generate_ics(self, dealership: dict, vehicle: dict, date_str: str, timeslot_int: int) -> str:
+        dt_start = datetime.strptime(f"{date_str} {timeslot_int:02d}:00", "%Y-%m-%d %H:%M")
+        dt_end = dt_start + timedelta(hours=1)
+        
+        dt_start_str = dt_start.strftime("%Y%m%dT%H%M%S")
+        dt_end_str = dt_end.strftime("%Y%m%dT%H%M%S")
+        now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        uid = uuid.uuid4().hex
+        
+        address = f"{dealership.get('address1', '')}, {dealership.get('city', '')}"
+        summary = f"Test Drive - {vehicle.get('year')} {vehicle.get('make')} {vehicle.get('model')}"
+        
+        ics_content = (
+            "BEGIN:VCALENDAR\n"
+            "VERSION:2.0\n"
+            "PRODID:-//CarClinch//Dealership Appointment//EN\n"
+            "BEGIN:VEVENT\n"
+            f"UID:{uid}\n"
+            f"DTSTAMP:{now_str}\n"
+            f"DTSTART:{dt_start_str}\n"
+            f"DTEND:{dt_end_str}\n"
+            f"SUMMARY:{summary}\n"
+            f"LOCATION:{dealership.get('name')} - {address}\n"
+            f"DESCRIPTION:Test drive appointment for the {summary}.\n"
+            "END:VEVENT\n"
+            "END:VCALENDAR"
+        )
+        return ics_content
+
+    def _finalize_booking(self, id_context: dict, parsed_output: dict, customer_email: str, received_email: dict = None):
+        date_str = parsed_output.get("date")
+        timeslot = parsed_output.get("timeslot")
+        
+        appt_id = f"appt_{uuid.uuid4().hex[:10]}"
+        appt_doc = {
+            "id": appt_id,
+            "dealerId": id_context["dealerId"],
+            "vehicleId": id_context["vehicleId"],
+            "leadId": id_context["leadId"],
+            "conversationId": id_context["conversationId"],
+            "appointmentDate": date_str,
+            "timeslot": str(timeslot)
+        }
+        self.db.update_item_in_container("appointments", appt_doc) 
+        logging.warning(f"[BOOKING SUCCESS] Appointment written to DB for {date_str} at {timeslot}.")
+
+        self._set_conversation_status(id_context["conversationId"], 0)
+
+        leads = self.db.query_items("leads", "SELECT * FROM c WHERE c.id=@id", [{"name": "@id", "value": id_context["leadId"]}])
+        if leads:
+            lead_doc = leads[0]
+            lead_doc["status"] = 1
+            self.db.update_item_in_container("leads", lead_doc)
+
+        customer = self._hydrate_customer_context(id_context)
+        vehicle = customer["vehicle"]
+        dealership = customer["dealership"]
+        
+        ics_content = self._generate_ics(dealership, vehicle, date_str, int(timeslot))
+        subject = f"Appointment Confirmation: {vehicle['year']} {vehicle['make']} {vehicle['model']}"
+        time_am_pm = self._fmt_time(int(timeslot))
+        
+        body_text = f"You are all set for a test drive on {date_str} at {time_am_pm}. A calendar invitation is attached to this email. We look forward to seeing you!"
+        email_content = build_confirmation_email_template(vehicle, date_str, time_am_pm)
+
+        msg_id = make_msgid()
+        
+        if received_email:
+            EmailFactory.get_provider("gmail").reply(
+                received_email["sender"],
+                received_email["message_id"],
+                subject,
+                email_content,
+                msg_id=msg_id,
+                attachments=[("invite.ics", ics_content, "text/calendar")] 
+            )
+        else:
+            EmailFactory.get_provider("gmail").send(
+                customer_email,
+                subject,
+                email_content,
+                msg_id=msg_id,
+                attachments=[("invite.ics", ics_content, "text/calendar")] 
+            )
+        
+        # send to dealership as well
+        dealer_email = dealership.get("email")
+        if dealer_email:
+            dealer_subject = f"[New Appointment] {vehicle['year']} {vehicle['make']} {vehicle['model']} — {date_str} at {time_am_pm}"
+            dealer_body = build_dealer_notification_template(
+                customer["lead"], vehicle, date_str, time_am_pm, id_context["conversationId"]
+            )
+            EmailFactory.get_provider("gmail").send(
+                dealer_email,
+                dealer_subject,
+                dealer_body,
+                msg_id=make_msgid(),
+                attachments=[("invite.ics", ics_content, "text/calendar")]
+            )
+            logging.info(f"Appointment confirmation forwarded to dealership at {dealer_email}.")
+        body_text = f"Test drive confirmed for {date_str} at {time_am_pm}."
+        self._store_message(id_context, None, msg_id, "assistant", body_text, subject)
+        logging.warning(f"Booking completely finalized for lead {id_context['leadId']}.")
+    
+    def _fmt_time(self, h: int) -> str:
+        if h < 12:
+            return f"{h}:00 AM"
+        elif h == 12:
+            return "12:00 PM"
+        else:
+            return f"{h - 12}:00 PM"
+
+    def _get_candidate_dates(self) -> list[str]:
+        """Returns the next 5 business days as ISO strings."""
+        candidates = []
+        d = date.today()
+        while len(candidates) < 5:
+            d += timedelta(days=1)
+            if d.weekday() < 5:
+                candidates.append(d.isoformat())
+        return candidates
+
+    def _build_booking_context(self, action: str, dealer_id: str, analysis_results: dict) -> str:
+        if action == "request_date":
+            candidates = self._get_candidate_dates()
+            display_labels = [date.fromisoformat(d).strftime("%A, %B %d") for d in candidates]
+            dates_str = ", ".join(display_labels)
+            
+            # remove newlines so _process_response doesn't inject <br> tags inside the table HTML
+            table_html = build_date_table(candidates).replace("\n", "")
+            
+            return (
+                f"\n\n[SYSTEM NOTIFICATION: The lead wants to book a test drive. "
+                f"You MUST suggest ONLY the following dates and no others: {dates_str}. "
+                f"Do not suggest today or any date not on this list. "
+                f"Include this table exactly as-is in your reply: {table_html}]"
+            )
+        elif action == "request_time" and analysis_results.get("appointmentDate"):
+            date_str = analysis_results.get("appointmentDate")
+            avail_slots = self._get_available_timeslots(dealer_id, date_str)
+            time_labels = [self._fmt_time(s) for s in avail_slots] if avail_slots else []
+            slots_str = ", ".join(time_labels) if time_labels else "No available timeslots for this date."
+            
+            table_html = build_time_table(time_labels).replace("\n", "") if time_labels else ""
+            
+            return (
+                f"\n\n[SYSTEM NOTIFICATION: The user requested an appointment on {date_str}. "
+                f"Available timeslots: {slots_str}. "
+                f"You MUST suggest ONLY the available timeslots listed above and NO OTHERS. "
+                f"If the user requests a time that is not in the list, you MUST tell them it is unavailable. "
+                f"{'Include this table exactly as-is in your reply: ' + table_html if table_html else 'Inform the lead there are no available times on this date and ask them to choose another date.'}]"
+            )
+        return ""
+
 # ------------- MAIN METHODS -------------
 
     # for initial contact from lead form intake
@@ -265,28 +443,47 @@ class Assistant(GPTClient):
                 "Form Submission"
             )
             
+        # inject the current date into the analysis prompt to help resolve "tomorrow", etc.
+        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        text_for_analysis = f"[Current Date Context: {current_date}]\n{lead_notes}"
+        
         # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(lead_notes)
+        analysis_results = Analysis().analyze(text_for_analysis)
         logging.warning(f"Analysis results: {analysis_results}")
     
-        if self._escalate(json.dumps(analysis_results), data["customer_email"], id_context):
+        if self._escalate(analysis_results, data["customer_email"], id_context):
             return  # skip send and store if escalation needed based on analysis
 
-        # build prompt with context
-        user_prompt = CONTACT_USER_PROMPT.format(**data)
+        # check for booking intent
+        booking_context = ""
+        if analysis_results.get("intentCategory") == "appointment":
+            action = analysis_results.get("intentAction")
+            if action == "confirm_booking" and analysis_results.get("appointmentDate") and analysis_results.get("appointmentTime") is not None:
+                parsed = {
+                    "date": analysis_results.get("appointmentDate"),
+                    "timeslot": analysis_results.get("appointmentTime")
+                }
+                logging.warning(f"[BOOKING FLOW] Confirmed booking for {parsed['date']} at {parsed['timeslot']}:00.")
+                self._finalize_booking(id_context, parsed, data["customer_email"])  # contact
+                # self._finalize_booking(id_context, parsed, received_email["sender"], received_email)  # reply
+                return
+            else:
+                booking_context = self._build_booking_context(action, id_context["dealerId"], analysis_results)
+        # -----------------------------
+
+        # build prompt with context (appended with booking slots if needed)
+        user_prompt = CONTACT_USER_PROMPT.format(**data) + booking_context
         prompts = self._get_default_message()
         prompts.append({"role": "user", "content": user_prompt})
         
         # generate content with AI
         resp = self.chat(prompts)
         raw_output = resp.output_text.strip()
+        response_id = resp.id
 
         # check for escalation before processing
         if self._escalate(raw_output, data['customer_email'], id_context):
             return  # skip send and store
-
-        # store response_id in the message doc for chaining
-        response_id = resp.id
 
         # build email content
         subject, body = self._process_response(raw_output)
@@ -353,27 +550,47 @@ class Assistant(GPTClient):
             received_email["subject"],
         )
         
+        # inject the current date into the analysis prompt
+        current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        text_for_analysis = f"[Current Date Context: {current_date}]\n{stripped_body}"
+
         # FIRST: analyze the lead notes
-        analysis_results = Analysis().analyze(stripped_body)
+        analysis_results = Analysis().analyze(text_for_analysis, previous_response_id=previous_response_id)
         logging.warning(f"Analysis results: {analysis_results}")
-        if self._escalate(json.dumps(analysis_results), received_email["sender"], id_context):
+        
+        if self._escalate(analysis_results, received_email["sender"], id_context):
             return  # skip send and store if escalation needed based on analysis
 
-        # build prompt with context
+        # check for booking intent
+        booking_context = ""
+        if analysis_results.get("intentCategory") == "appointment":
+            action = analysis_results.get("intentAction")
+            if action == "confirm_booking" and analysis_results.get("appointmentDate") and analysis_results.get("appointmentTime") is not None:
+                parsed = {
+                    "date": analysis_results.get("appointmentDate"),
+                    "timeslot": analysis_results.get("appointmentTime")
+                }
+                logging.warning(f"[BOOKING FLOW] Confirmed booking for {parsed['date']} at {parsed['timeslot']}:00.")
+                self._finalize_booking(id_context, parsed, received_email["sender"], received_email)
+                return
+            else:
+                booking_context = self._build_booking_context(action, id_context["dealerId"], analysis_results)
+        # -----------------------------
+
+        # build prompt with context (appended with booking slots if needed)
         prompts = self._get_default_message()
-        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body)
+        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body) + booking_context
         prompts.append({"role": "user", "content": user_prompt})
 
         # generate content with AI
         resp = self.chat(prompts, previous_response_id=previous_response_id)
         raw_output = resp.output_text.strip()
+        response_id = resp.id
+        logging.warning(f"--- RAW LLM OUTPUT ---\n{raw_output}\n----------------------")
         
         # check for escalation before processing
         if self._escalate(raw_output, received_email["sender"], id_context):
             return  # skip send and store
-
-        # store response_id in the message doc for chaining
-        response_id = resp.id
 
         # build email content
         subject, body = self._process_response(raw_output)
@@ -478,4 +695,3 @@ class Assistant(GPTClient):
         self._store_message(id_context, resp.id, msg_id, "assistant", raw_body, subject)
         
         return True
-    

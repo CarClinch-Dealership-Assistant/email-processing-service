@@ -8,12 +8,15 @@ class Analysis(GPTClient):
         super().__init__()
         
     # generate analytics for a received lead note/message to determine intent, sentiment, tone, urgency, and whether escalation is needed
-    def analyze(self, received_body: str) -> dict:
+    def analyze(self, received_body: str, previous_response_id: str = None) -> dict:
         user_prompt = ANALYSIS_USER_PROMPT.format(received_body=received_body)
-        response = self.chat([
-            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
-        ])
+        response = self.chat(
+            [
+                {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ],
+            previous_response_id=previous_response_id
+        )
         try:
             raw_content = response.output_text.strip()
             parsed = json.loads(raw_content)
@@ -23,6 +26,8 @@ class Analysis(GPTClient):
             return {
                 "intentCategory": "out_of_scope",
                 "intentAction": "out_of_scope",
+                "appointmentDate": None,
+                "appointmentTime": None,
                 "sentimentLabel": "neutral",
                 "tone": "neutral",
                 "urgency": "low",
