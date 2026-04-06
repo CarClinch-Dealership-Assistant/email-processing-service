@@ -17,29 +17,33 @@ def _db_with_chain(mock_db_cls, msg_doc=None):
         "vehicleId": "veh_001",
         "dealerId": "dealer_001",
     }
-    mock_db_cls.return_value.query_items_from_default_container.return_value = [doc]
+    mock_db_cls.return_value.query_items.return_value = [doc]
     return mock_db_cls
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
+@patch("app.assistant.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_happy_path_with_chain(mock_chat, mock_factory, mock_db_cls, assistant, sample_received_email):
+def test_reply_happy_path_with_chain(mock_chat, mock_analysis_cls, mock_factory, mock_db_cls, assistant, sample_received_email):
     _db_with_chain(mock_db_cls)
+    mock_analysis_cls.return_value.analyze.return_value = {"escalate": False}
     mock_chat.return_value = make_mock_resp("Re: Civic\nSee you Saturday!", "resp_new")
     mock_factory.get_provider.return_value.reply.return_value = True
 
     assistant.reply(sample_received_email)
 
     mock_factory.get_provider.return_value.reply.assert_called_once()
-    # two store_message calls: incoming user msg + outgoing assistant msg
-    assert mock_db_cls.return_value.save_message_to_default_container.call_count == 2
+    
+    assert mock_db_cls.return_value.save_message.call_count == 2
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
+@patch("app.assistant.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_no_chain_falls_back_to_sender_lookup(mock_chat, mock_factory, mock_db_cls, assistant, sample_received_email):
+def test_reply_no_chain_falls_back_to_sender_lookup(mock_chat, mock_analysis_cls, mock_factory, mock_db_cls, assistant, sample_received_email):
     """When in_reply_to yields no chain, _resolve_context_from_sender is called."""
-    mock_db_cls.return_value.query_items_from_default_container.return_value = []
+    mock_db_cls.return_value.query_items.return_value = []
+    mock_analysis_cls.return_value.analyze.return_value = {"escalate": False}
     mock_chat.return_value = make_mock_resp("Re: Civic\nSee you Saturday!")
     mock_factory.get_provider.return_value.reply.return_value = True
 
@@ -55,9 +59,10 @@ def test_reply_no_chain_falls_back_to_sender_lookup(mock_chat, mock_factory, moc
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
+@patch("app.assistant.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_aborts_if_context_unresolvable(mock_chat, mock_factory, mock_db_cls, assistant, sample_received_email):
-    mock_db_cls.return_value.query_items_from_default_container.return_value = []
+def test_reply_aborts_if_context_unresolvable(mock_chat, mock_analysis_cls, mock_factory, mock_db_cls, assistant, sample_received_email):
+    mock_db_cls.return_value.query_items.return_value = []
 
     with patch.object(assistant, "_resolve_context_from_sender", return_value=None):
         assistant.reply(sample_received_email)
@@ -67,22 +72,30 @@ def test_reply_aborts_if_context_unresolvable(mock_chat, mock_factory, mock_db_c
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
+@patch("app.assistant.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_escalation_skips_send(mock_chat, mock_factory, mock_db_cls, assistant, sample_received_email):
+def test_reply_escalation_skips_send(mock_chat, mock_analysis_cls, mock_factory, mock_db_cls, assistant, sample_received_email):
     _db_with_chain(mock_db_cls)
-    mock_chat.return_value = make_mock_resp('{"escalate": true, "reason": "trade_inquiry"}')
+    mock_analysis_cls.return_value.analyze.return_value = {"escalate": True, "reason": "trade_inquiry", "intentCategory": "pricing"}
 
     assistant.reply(sample_received_email)
 
-    mock_factory.get_provider.assert_not_called()
-    # only one store_message call: the incoming user message; no outgoing
-    assert mock_db_cls.return_value.save_message_to_default_container.call_count == 1
+    
+    mock_factory.get_provider.return_value.reply.assert_not_called()
+    
+    
+    assert mock_factory.get_provider.return_value.send.call_count >= 1
+
+    
+    assert mock_db_cls.return_value.save_message.call_count == 2
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
+@patch("app.assistant.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_no_in_reply_to_still_attempts_sender_lookup(mock_chat, mock_factory, mock_db_cls, assistant, sample_received_email):
+def test_reply_no_in_reply_to_still_attempts_sender_lookup(mock_chat, mock_analysis_cls, mock_factory, mock_db_cls, assistant, sample_received_email):
     sample_received_email["in_reply_to"] = ""
+    mock_analysis_cls.return_value.analyze.return_value = {"escalate": False}
     mock_chat.return_value = make_mock_resp("Re: Civic\nSounds good!")
     mock_factory.get_provider.return_value.reply.return_value = True
 
