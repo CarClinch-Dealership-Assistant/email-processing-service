@@ -1,29 +1,28 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from app.email.protocol import StandardEmail
+import app.assistant.gpt
+import app.assistant
+from app.assistant import Assistant
 
-@pytest.fixture
-def make_analysis_result():
-    def _make(escalate=False, category="appointment", action="request", tone="positive"):
-        return {
-            "intentCategory": category,
-            "intentAction": action,
-            "sentimentLabel": "positive" if not escalate else "negative",
-            "tone": tone,
-            "urgency": "low",
-            "intentConfidence": "high",
-            "escalate": escalate,
-            "summary": "Test summary",
-        }
-    return _make
+def _patched_init(self):
+    app.assistant.gpt.GPTClient.__init__(self)
 
-# prevent CosmosDBClient.__init__ from connecting in every test
+Assistant.__init__ = _patched_init
+
+@property
+def lazy_db(self):
+    if not hasattr(self, "_lazy_db"):
+        self._lazy_db = app.assistant.CosmosDBClient()
+    return self._lazy_db
+
+Assistant.db = lazy_db
+
 @pytest.fixture(autouse=True)
 def mock_cosmos():
     with patch("app.database.cosmos.CosmosDBClient._init_client"):
         yield
-    
-# reusable data made w AI; basically mocking a lead intake in service bus, and standard email factory fields
+
 @pytest.fixture
 def sample_customer():
     return {
@@ -85,7 +84,6 @@ def make_standard_email():
         return StandardEmail(**{**defaults, **overrides})
     return _make
 
-# match response to OpenAI API shape
 def make_mock_resp(text="Subject line\nBody of the email.", resp_id="resp_abc123"):
     resp = MagicMock()
     resp.output_text = text
