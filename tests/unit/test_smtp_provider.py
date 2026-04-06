@@ -11,7 +11,7 @@ def provider():
     p.password = "secret"
     return p
 
-#  send 
+
 
 @patch("app.email.providers.smtp.smtplib.SMTP")
 def test_send_returns_true_on_success(mock_smtp, provider):
@@ -28,7 +28,7 @@ def test_send_sets_message_id_header(mock_smtp, provider):
     sent_msg = ctx.send_message.call_args[0][0]
     assert sent_msg["Message-ID"] == "<custom@id>"
 
-#  reply 
+
 
 @patch("app.email.providers.smtp.smtplib.SMTP")
 def test_reply_prefixes_re_to_subject(mock_smtp, provider):
@@ -51,7 +51,7 @@ def test_reply_sets_in_reply_to_header(mock_smtp, provider):
     sent_msg = ctx.send_message.call_args[0][0]
     assert sent_msg["In-Reply-To"] == "<orig@id>"
 
-#  GmailProvider init 
+
 
 def test_gmail_raises_on_missing_env():
     with patch.dict("os.environ", {}, clear=True):
@@ -63,7 +63,7 @@ def test_gmail_raises_on_non_gmail_address():
         with pytest.raises(ValueError, match="Invalid gmail"):
             GmailProvider()
 
-#  parse_mail_body 
+
 
 def test_parse_mail_body_plain_text(provider):
     import email
