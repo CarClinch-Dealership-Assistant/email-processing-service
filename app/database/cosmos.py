@@ -9,7 +9,6 @@ class CosmosDBClient:
         self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
         self.verify_ssl = os.getenv("COSMOS_VERIFY_SSL", "true").lower() != "false"
-        self.container = "messages"
         self._init_client()
 
     def _init_client(self):
@@ -34,35 +33,36 @@ class CosmosDBClient:
     def get_container_client(self, db_name: str, container_name: str):
         return self._get_database_client(db_name).get_container_client(container_name)
 
-    def get_default_container_client(self):
-        return self.get_container_client(self.database, self.container)
-
-    def save_message_to_default_container(self, msg: dict[str, str]):
-        self.get_default_container_client().create_item(body=msg)
-        return msg
-
-    def query_items_from_default_container(self, query: str, params: list[dict[str, str]]):
+    def save_message(self, msg: dict) -> dict:
         try:
-            items = self.get_default_container_client().query_items(
-                query=query,
-                parameters=params,
-                enable_cross_partition_query=True
-            )
-            return [item for item in items]
+            self.get_container_client(self.database, "messages").create_item(body=msg)
+            return msg
         except exceptions.CosmosHttpResponseError as e:
-            logging.error(f"Query failed: {e.message}")
-            return []
+            logging.error(f"save_message failed: {e.message}")
+            return None
 
-    def query_items_from_container(self, container_name: str, query: str, params: list):
+    def query_items(self, container_name: str, query: str, params: list) -> list:
         try:
             container = self.get_container_client(self.database, container_name)
-            items = container.query_items(
-                query=query,
-                parameters=params,
-                enable_cross_partition_query=True
-            )
-            return [item for item in items]
+            items = container.query_items(query=query, parameters=params, enable_cross_partition_query=True)
+            return list(items)
         except exceptions.CosmosHttpResponseError as e:
             logging.error(f"Query failed: {e.message}")
             return []
+    
+    def get_item_by_id(self, item_id: str, container_name: str) -> dict:
+        results = self.query_items(
+            container_name,
+            "SELECT * FROM c WHERE c.id = @id",
+            [{"name": "@id", "value": item_id}]
+        )
+        return results[0] if results else None
+
+    def update_item_in_container(self, container_name: str, item: dict) -> dict:
+        try:
+            self.get_container_client(self.database, container_name).upsert_item(body=item)
+            return item
+        except exceptions.CosmosHttpResponseError as e:
+            logging.error(f"update_item_in_container failed for {item.get('id')}: {e.message}")
+            return None
 
