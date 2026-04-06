@@ -2,6 +2,21 @@ import pytest
 from unittest.mock import MagicMock, patch
 from app.email.protocol import StandardEmail
 
+@pytest.fixture
+def make_analysis_result():
+    def _make(escalate=False, category="appointment", action="request", tone="positive"):
+        return {
+            "intentCategory": category,
+            "intentAction": action,
+            "sentimentLabel": "positive" if not escalate else "negative",
+            "tone": tone,
+            "urgency": "low",
+            "intentConfidence": "high",
+            "escalate": escalate,
+            "summary": "Test summary",
+        }
+    return _make
+
 # prevent CosmosDBClient.__init__ from connecting in every test
 @pytest.fixture(autouse=True)
 def mock_cosmos():
