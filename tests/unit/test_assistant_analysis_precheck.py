@@ -10,7 +10,6 @@ def assistant():
     with patch("app.assistant.gpt.OpenAI"):
         return Assistant()
 
-
 def _routine_analysis():
     return {
         "intentCategory": "appointment",
@@ -23,12 +22,8 @@ def _routine_analysis():
         "summary": "Wants a test drive.",
     }
 
-
 def _escalating_analysis():
     return {**_routine_analysis(), "escalate": True, "intentCategory": "pricing"}
-
-
-# ---- contact() analysis pre-check ----
 
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
@@ -38,7 +33,6 @@ def test_contact_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mo
     """If Analysis flags escalate before chat, chat must never be called."""
     mock_analysis_cls.return_value.analyze.return_value = _escalating_analysis()
 
-    # also need _escalate to short-circuit; give it a minimal db
     mock_db.return_value.query_items.return_value = []
     mock_db.return_value.get_item_by_id.return_value = {"id": "conv_001", "status": 1}
 
@@ -60,9 +54,6 @@ def test_contact_routine_analysis_proceeds_to_chat(mock_chat, mock_analysis_cls,
 
     mock_chat.assert_called_once()
 
-
-# ---- reply() analysis pre-check ----
-
 @patch("app.assistant.CosmosDBClient")
 @patch("app.assistant.EmailFactory")
 @patch("app.assistant.Analysis")
@@ -71,10 +62,10 @@ def test_reply_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mock
     mock_analysis_cls.return_value.analyze.return_value = _escalating_analysis()
 
     mock_db_cls.return_value.query_items.side_effect = [
-        # chain lookup for in_reply_to
+        
         [{"responseId": "resp_prev", "conversationId": "conv_001",
           "leadId": "lead_001", "vehicleId": "veh_001", "dealerId": "dealer_001"}],
-        # messages for escalation thread (empty is fine)
+        
         [],
     ]
     mock_db_cls.return_value.get_item_by_id.return_value = {"id": "conv_001", "status": 1}

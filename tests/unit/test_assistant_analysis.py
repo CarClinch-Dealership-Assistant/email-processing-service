@@ -47,7 +47,7 @@ def test_analyze_sets_escalate_true_for_pricing(analysis):
 def test_analyze_falls_back_on_bad_json(analysis):
     with patch.object(analysis, "chat", return_value=make_mock_resp("not json at all")):
         result = analysis.analyze("some message")
-    # fallback default must escalate to avoid missing important messages
+    
     assert result["escalate"] is True
     assert result["intentCategory"] == "out_of_scope"
     assert result["summary"] == "Unable to analyze lead message"

@@ -2,15 +2,15 @@ import pytest
 from unittest.mock import MagicMock, patch
 from app.email.protocol import StandardEmail
 
-# --- MONKEYPATCH TO FIX FIXTURE/PATCH TIMING ---
-# This ensures that Assistant() uses the mocked DB injected by the 
-# test decorators, requiring ZERO changes to your main code.
+
+
+
 import app.assistant.gpt
 import app.assistant
 from app.assistant import Assistant
 
 def _patched_init(self):
-    # Initialize GPTClient but defer CosmosDBClient creation
+    
     app.assistant.gpt.GPTClient.__init__(self)
 
 Assistant.__init__ = _patched_init
@@ -18,21 +18,18 @@ Assistant.__init__ = _patched_init
 @property
 def lazy_db(self):
     if not hasattr(self, "_lazy_db"):
-        # This evaluates at runtime during the test, correctly capturing 
-        # the @patch MagicMock instead of a real connection.
+        
         self._lazy_db = app.assistant.CosmosDBClient()
     return self._lazy_db
 
 Assistant.db = lazy_db
-# -----------------------------------------------
 
-# prevent CosmosDBClient.__init__ from connecting in every test
+
 @pytest.fixture(autouse=True)
 def mock_cosmos():
     with patch("app.database.cosmos.CosmosDBClient._init_client"):
         yield
-    
-# reusable data made w AI; basically mocking a lead intake in service bus, and standard email factory fields
+
 @pytest.fixture
 def sample_customer():
     return {
@@ -48,7 +45,7 @@ def sample_customer():
             "year": 2021,
             "make": "Honda",
             "model": "Civic",
-            "status": 1,           # used
+            "status": 1,           
             "trim": "LX",
             "mileage": 45000,
             "transmission": "Automatic",
@@ -94,7 +91,6 @@ def make_standard_email():
         return StandardEmail(**{**defaults, **overrides})
     return _make
 
-# match response to OpenAI API shape
 def make_mock_resp(text="Subject line\nBody of the email.", resp_id="resp_abc123"):
     resp = MagicMock()
     resp.output_text = text

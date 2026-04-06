@@ -33,7 +33,7 @@ def test_reply_happy_path_with_chain(mock_chat, mock_analysis_cls, mock_factory,
     assistant.reply(sample_received_email)
 
     mock_factory.get_provider.return_value.reply.assert_called_once()
-    # two store_message calls: incoming user msg + outgoing assistant msg
+    
     assert mock_db_cls.return_value.save_message.call_count == 2
 
 @patch("app.assistant.CosmosDBClient")
@@ -80,13 +80,13 @@ def test_reply_escalation_skips_send(mock_chat, mock_analysis_cls, mock_factory,
 
     assistant.reply(sample_received_email)
 
-    # 1. The regular AI .reply() should NOT be called
+    
     mock_factory.get_provider.return_value.reply.assert_not_called()
     
-    # 2. But the escalation acknowledgement IS sent via .send()
+    
     assert mock_factory.get_provider.return_value.send.call_count >= 1
 
-    # 3. Two store_message calls happen: The incoming user message + The system escalation note
+    
     assert mock_db_cls.return_value.save_message.call_count == 2
 
 @patch("app.assistant.CosmosDBClient")

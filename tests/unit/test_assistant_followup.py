@@ -102,9 +102,9 @@ def test_followup_aborts_and_closes_conv_when_vehicle_sold(mock_chat, mock_facto
 
     result = assistant.follow_up(ID_CONTEXT, sequence=1, start_time="2024-01-01T00:00:00Z")
 
-    assert result is None  # early return with no explicit value
+    assert result is None  
     mock_chat.assert_not_called()
-    # conversation should be marked inactive
+    
     db.update_item_in_container.assert_called_once()
 
 
@@ -121,7 +121,7 @@ def test_followup_seq2_injects_alt_vehicles_into_prompt(mock_chat, mock_factory,
 
     assistant.follow_up(ID_CONTEXT, sequence=2, start_time="2024-01-01T00:00:00Z")
 
-    # the prompt passed to chat must contain the alt vehicle names
+    
     prompt_messages = mock_chat.call_args[0][0]
     combined = " ".join(str(m) for m in prompt_messages)
     assert "Corolla" in combined
