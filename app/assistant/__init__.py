@@ -13,6 +13,7 @@ from app.assistant.gpt import GPTClient
 from app.assistant.template import build_email_template, build_escalation_email_template, build_ack_email_template, build_confirmation_email_template, build_dealer_notification_template, build_date_table, build_time_table
 from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.assistant.analysis import Analysis
+from app.assistant.date import get_candidate_dates
 
 
 class Assistant(GPTClient):
@@ -42,13 +43,6 @@ class Assistant(GPTClient):
         logging.info(f"Stored message: {doc_id}")
         return doc_id
 
-    # helper function to build the base message structure w system prompt
-    def _get_default_message(self):
-        message = []
-        system = {"role": "system", "content": SYSTEM_PROMPT}
-
-        message.append(system)
-        return message
 
     # helper function to extract and format all necessary data for prompt
     def _get_formatting_data(self, customer):
@@ -256,7 +250,6 @@ class Assistant(GPTClient):
             {"name": "@did", "value": dealer_id},
             {"name": "@date", "value": strict_date_str} # Use the sanitized date here
         ]
-        
         logging.warning(f"[DB QUERY] Looking for appts on {strict_date_str} for dealer {dealer_id}")
 
         appointments = self.db.query_items("appointments", query, params) 
@@ -268,7 +261,7 @@ class Assistant(GPTClient):
     def _generate_ics(self, dealership: dict, vehicle: dict, date_str: str, timeslot_int: int) -> str:
         dt_start = datetime.strptime(f"{date_str} {timeslot_int:02d}:00", "%Y-%m-%d %H:%M")
         dt_end = dt_start + timedelta(hours=1)
-        
+
         dt_start_str = dt_start.strftime("%Y%m%dT%H%M%S")
         dt_end_str = dt_end.strftime("%Y%m%dT%H%M%S")
         now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -389,7 +382,7 @@ class Assistant(GPTClient):
 
     def _build_booking_context(self, action: str, dealer_id: str, analysis_results: dict) -> str:
         if action == "request_date":
-            candidates = self._get_candidate_dates()
+            candidates = get_candidate_dates(analysis_results.get("appointmentDate", ""))
             display_labels = [date.fromisoformat(d).strftime("%A, %B %d") for d in candidates]
             dates_str = ", ".join(display_labels)
             
