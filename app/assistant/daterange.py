@@ -4,7 +4,6 @@ import logging
 
 
 def get_candidate_dates(candidate_dates) -> list:
-    logging.debug(f"get_candidate_dates: {candidate_dates}")
     return DateRange().get_date_range(candidate_dates)
 
 
@@ -24,6 +23,7 @@ class DateRange:
             case "nextmonth":
                 return self.get_next_month()
             case _:
+                logging.warning(f"get_candidate_dates error: {period}")
                 return self.get_next_ten_days()
 
     def get_next_ten_days(self) -> list:
