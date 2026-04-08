@@ -1,8 +1,10 @@
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timedelta
 import calendar
+import logging
 
 
 def get_candidate_dates(candidate_dates) -> list:
+    logging.debug(f"get_candidate_dates: {candidate_dates}")
     return DateRange().get_date_range(candidate_dates)
 
 
@@ -27,7 +29,7 @@ class DateRange:
     def get_next_ten_days(self) -> list:
         today = datetime.now().date()
         date_list = [
-            (today + timedelta(days=i)).strftime('%Y-%m-%d')
+            (today + timedelta(days=i)).isoformat()
             for i in range(10)
         ]
         return date_list
@@ -37,7 +39,7 @@ class DateRange:
         days_left = 6 - today.weekday()
 
         date_list = [today + timedelta(days=i) for i in range(days_left + 1)]
-        return [d.strftime('%Y-%m-%d') for d in date_list]
+        return [d.isoformat() for d in date_list]
 
     def get_this_month(self) -> list:
         today = datetime.now().date()
@@ -47,7 +49,7 @@ class DateRange:
             for i in range((last_day - today.day) + 1)
         ]
 
-        return [d.strftime('%Y-%m-%d') for d in date_list]
+        return [d.isoformat() for d in date_list]
 
     def get_next_week(self) -> list:
         today = datetime.now().date()
@@ -55,7 +57,7 @@ class DateRange:
 
         next_monday = today + timedelta(days=days_until_next_monday)
         next_week = [
-            (next_monday + timedelta(days=i)).strftime('%Y-%m-%d')
+            (next_monday + timedelta(days=i)).isoformat()
             for i in range(7)
         ]
         return next_week
@@ -73,13 +75,9 @@ class DateRange:
         _, num_days = calendar.monthrange(year, next_month)
 
         date_list = [
-            datetime(year, next_month, day).strftime('%Y-%m-%d')
+            datetime(year, next_month, day).isoformat()
             for day in range(1, num_days + 1)
         ]
 
         return date_list
 
-if __name__ == "__main__":
-    print(get_candidate_dates(""))
-    print(get_candidate_dates("this week"))
-    print(get_candidate_dates("next month"))
