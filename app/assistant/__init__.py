@@ -42,6 +42,13 @@ class Assistant(GPTClient):
         logging.info(f"Stored message: {doc_id}")
         return doc_id
 
+    def _get_default_message(self):
+        message = []
+        system = {"role": "system", "content": SYSTEM_PROMPT}
+
+        message.append(system)
+        return message
+
 
     # helper function to extract and format all necessary data for prompt
     def _get_formatting_data(self, customer):
