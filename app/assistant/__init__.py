@@ -1,5 +1,4 @@
 import json
-from operator import ge
 import re
 import uuid
 import logging
@@ -13,7 +12,7 @@ from app.assistant.gpt import GPTClient
 from app.assistant.template import build_email_template, build_escalation_email_template, build_ack_email_template, build_confirmation_email_template, build_dealer_notification_template, build_date_table, build_time_table
 from app.assistant.prompts import SYSTEM_PROMPT, CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.assistant.analysis import Analysis
-from app.assistant.date import get_candidate_dates
+from app.assistant.daterange import get_candidate_dates
 
 
 class Assistant(GPTClient):

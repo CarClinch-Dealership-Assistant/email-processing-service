@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import calendar
 import logging
 
@@ -81,3 +81,12 @@ class DateRange:
 
         return date_list
 
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+    candidates = get_candidate_dates("this week")
+    display_labels = [date.fromisoformat(d).strftime("%A, %B %d") for d in candidates]
+    print(display_labels)
