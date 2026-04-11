@@ -119,9 +119,25 @@ Set "escalate": false for routine, in-scope inquiries.
 
 ## APPOINTMENT BOOKING LOGIC
 If the lead wants to book a test drive or appointment, set intentCategory to "appointment" and select the correct intentAction:
-1. "request_date": The lead wants to book but has NOT provided a specific date or time. Do not assume that the lack of a date means today/the earliest available time. If no specific date is said by the lead, this is the assumption to follow. if the lead provided a range date (e.g., "this week", "next week", "this month",  "next month"), you MUST extract this ange date into `appointmentDate`.
+1. "request_date": The lead wants to book but has NOT provided a specific date or time. Do not assume that the lack of a date means today/the earliest available time. If no specific date is said by the lead, this is the assumption to follow.
+2. "request_date_range": The lead asks about availability within a bounded or relative date range — e.g., "Do you have dates in 2 weeks?", "Any availability next month?", "Can I come in between April 8 and April 21?", "Sometime this week?". You MUST extract the range as an array of two ISO 8601 dates: [rangeStart, rangeEnd]. Derive rangeStart and rangeEnd from today's date and the lead's phrasing. If only one boundary is implied (e.g., "next month"), set rangeStart to the first day of that period and rangeEnd to the last day.
 2. "request_time": The lead provided a specific date (e.g., "April 20th", "tomorrow") but NO specific time. You MUST extract this date into `appointmentDate` as YYYY-MM-DD.
 3. "confirm_booking": The lead provided BOTH a date and time (e.g., "2 PM on April 20th"). You MUST extract the date into `appointmentDate` (YYYY-MM-DD) and the time into `appointmentTime` (integer 0-23, e.g., 14 for 2 PM).
+
+### DATE RANGE RESOLUTION RULES AND extract date into `appointmentDate` rules
+When intentAction is "request_date_range", resolve relative expressions using today's date, For example: Today's date is Friday, April 10, 2026:
+- "this week" → Monday through Sunday of the current calendar week. like: appointmentDate="2026-04-10,2026-04-11,2026-04-12"
+- "next week" → Monday through Sunday of the following calendar week. like: appointmentDate="2026-04-13,2026-04-14,2026-04-15,2026-04-16,2026-04-17,2026-04-18,2026-04-19"
+- "in 2 weeks" → A 7-day window starting 14 days from today. 
+- "in X weeks" → A 7-day window starting X×7 days from today.
+- "this month" → First to last day of the current calendar month.
+- "next month" → First to last day of the following calendar month.
+- "this weekend" → The upcoming Saturday and Sunday (use Saturday as rangeStart, Sunday as rangeEnd).
+- Explicit range (e.g., "between April 8 and April 21") → Use the stated dates directly.
+- "in the next few days" → Today through 4 days from today. like: appointmentDate="2026-04-10,2026-04-11,2026-04-12,2026-04-13,"
+- "soon" or "sometime soon" → Today through 7 days from today (treat as low-confidence range; set intentConfidence to "low").
+- "after [date]" with no end → Set rangeStart to that date and rangeEnd to 30 days after rangeStart.
+- "before [date]" with no start → Set rangeStart to today and rangeEnd to the stated date.
 
 ## RESPONSE FORMAT
 Select one value per field from the options listed:

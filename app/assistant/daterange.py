@@ -12,19 +12,11 @@ class DateRange:
         pass
 
     def get_date_range(self, period:str) -> list:
-        p = period.lower().replace(" ", "").replace("_", "")
-        match p:
-            case "thisweek":
-                return self.get_this_week()
-            case "nextweek":
-                return self.get_next_week()
-            case "thismonth":
-                return self.get_this_month()
-            case "nextmonth":
-                return self.get_next_month()
-            case _:
-                logging.warning(f"get_candidate_dates error: {period}")
-                return self.get_next_ten_days()
+        l = period.split(",")
+        if len(l) != 0:
+            return l
+        return self.get_next_ten_days()
+
 
     def get_next_ten_days(self) -> list:
         today = datetime.now().date()
@@ -81,12 +73,3 @@ class DateRange:
 
         return date_list
 
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    candidates = get_candidate_dates("this week")
-    display_labels = [date.fromisoformat(d).strftime("%A, %B %d") for d in candidates]
-    print(display_labels)
