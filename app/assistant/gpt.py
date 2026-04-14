@@ -1,6 +1,12 @@
 import os
 from openai import OpenAI
+from app.assistant.prompts import SYSTEM_PROMPT
 
+LLM_ROLE_USER = "user"
+LLM_ROLE_ASSISTANT = "assistant"
+LLM_ROLE_SYSTEM = "system"
+LLM_MESSAGE_KEY_ROLE = "role"
+LLM_MESSAGE_KEY_CONTENT = "content"
 
 class GPTClient:
     def __init__(self):
@@ -17,8 +23,8 @@ class GPTClient:
         instructions = None
         input_messages = []
         for msg in messages:
-            if msg["role"] == "system":
-                instructions = msg["content"]
+            if msg[LLM_MESSAGE_KEY_ROLE] == LLM_ROLE_SYSTEM:
+                instructions = msg[LLM_MESSAGE_KEY_CONTENT]
             else:
                 input_messages.append(msg)
 
@@ -33,3 +39,21 @@ class GPTClient:
 
         resp = self.cli.responses.create(**kwargs)
         return resp
+
+    def build_message_prompt(self, role, content):
+        return {LLM_MESSAGE_KEY_ROLE: role, LLM_MESSAGE_KEY_CONTENT: content}
+
+    def build_assistant_message_prompt(self, content):
+        return self.build_message_prompt(LLM_ROLE_ASSISTANT, content)
+
+    def build_user_message_prompt(self, content):
+        return self.build_message_prompt(LLM_ROLE_USER, content)
+
+    def get_LLM_user_role(self):
+        return LLM_ROLE_USER
+
+    def get_LLM_assistant_role(self):
+        return LLM_ROLE_ASSISTANT
+
+    def get_default_message_prompt(self):
+        return [self.build_message_prompt(LLM_ROLE_SYSTEM, SYSTEM_PROMPT)]
