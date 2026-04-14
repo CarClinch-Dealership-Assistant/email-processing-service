@@ -12,8 +12,7 @@ class Analysis(GPTClient):
         user_prompt = ANALYSIS_USER_PROMPT.format(received_body=received_body)
         response = self.chat(
             [self.build_system_message_prompt(ANALYSIS_SYSTEM_PROMPT),
-                self.build_user_message_prompt(user_prompt)
-            ],
+                self.build_user_message_prompt(user_prompt)],
             previous_response_id=previous_response_id
         )
         try:

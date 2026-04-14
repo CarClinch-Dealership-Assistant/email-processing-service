@@ -1,5 +1,6 @@
 import logging
 import ast
+import os
 import uuid
 from app.email.factory import EmailFactory, DEFAULT_EMAIL_PROVIDER
 from app.assistant.base import BaseAssistant
@@ -7,6 +8,8 @@ from datetime import datetime, timezone, timedelta, date
 from app.assistant.template import build_confirmation_email_template, build_dealer_notification_template, build_date_table, build_time_table
 from email.utils import make_msgid
 from dateutil import parser
+
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
 class Appointment(BaseAssistant):
     def __init__(self):
