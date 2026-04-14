@@ -149,7 +149,7 @@ class Assistant(Escalation, Appointment):
             return False
 
         # did user reply yet
-        reply_count = self.dbcli.message_container.query_user_items_with_conversation_and_time(reply_query, params)
+        reply_count = self.dbcli.message_container.query_user_items_with_conversation_and_time(conversation_id, start_time)
         if len(reply_count) > 0:
             logging.info(f"User replied to {conversation_id}. Aborting follow-up.")
             return False
