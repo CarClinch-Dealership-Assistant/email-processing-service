@@ -1,12 +1,12 @@
 import logging
+import os
 from app.assistant.base import BaseAssistant
 from app.assistant.escalation import Escalation
 from app.assistant.appointment import Appointment
 from app.assistant.prompts import CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
-from app.email.factory import EmailFactory
+from app.email.factory import EmailFactory, DEFAULT_EMAIL_PROVIDER
 from email.utils import make_msgid
 from app.assistant.template import build_email_template
-from app.assistant.constants import DEFAULT_EMAIL_PROVIDER
 
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
@@ -67,11 +67,7 @@ class Assistant(Escalation, Appointment):
         in_reply_to = received_email.get("in_reply_to", "")
 
         if in_reply_to:
-            msgs = self.db.query_items(
-                "messages",
-                "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'",
-                [{"name": "@msgId", "value": in_reply_to}],
-            )
+            msgs = self.dbcli.message_container.query_assistant_items_with_msg_id(in_reply_to)
 
             if msgs:
                 previous_response_id = msgs[0].get("responseId")
@@ -147,17 +143,14 @@ class Assistant(Escalation, Appointment):
         conversation_id = id_context.get("conversationId")
 
         # is conversation active still
-        conv_query = "SELECT * FROM c WHERE c.id = @id"
-        convs = self.db.query_items("conversations", conv_query, [{"name": "@id", "value": conversation_id}])
+        convs = self.dbcli.conversation_container.get_item_with_id(conversation_id)
         if not convs or convs[0].get("status") == 0:
             logging.info(f"Conversation {conversation_id} inactive. Aborting follow-up.")
             return False
 
         # did user reply yet
-        reply_query = "SELECT VALUE COUNT(1) FROM c WHERE c.conversationId = @convId AND c.role = 'user' AND c.timestamp > @startTime"
-        params = [{"name": "@convId", "value": conversation_id}, {"name": "@startTime", "value": start_time}]
-        reply_count = self.db.query_items("messages", reply_query, params)
-        if reply_count and reply_count[0] > 0:
+        reply_count = self.dbcli.message_container.query_user_items_with_conversation_and_time(reply_query, params)
+        if len(reply_count) > 0:
             logging.info(f"User replied to {conversation_id}. Aborting follow-up.")
             return False
 
@@ -183,13 +176,7 @@ class Assistant(Escalation, Appointment):
             dealer_id = id_context["dealerId"]
             vehicle_id = id_context["vehicleId"]
 
-            alt_vehicles = self.db.query_items(
-                "vehicles",
-                "SELECT TOP 3 * FROM c WHERE c.dealerId = @did AND c.id != @vid AND c.status = 1",
-                [{"name": "@did", "value": dealer_id},
-                 {"name": "@vid", "value": vehicle_id}]
-            )
-
+            alt_vehicles = self.dbcli.vehicle_container.query_items_with_vehicle_and_dealership(vehicle_id, dealer_id)
             if alt_vehicles:
                 alt_vehicles_text = ""
                 for v in alt_vehicles:

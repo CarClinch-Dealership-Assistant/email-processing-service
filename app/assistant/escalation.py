@@ -38,25 +38,17 @@ class Escalation(BaseAssistant):
         self.set_conversation_status(conversation_id, status=0)
 
         # fetch full thread for the dealership email
-        messages = self.db.query_items(
-            "messages",
-            "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC",
-            [{"name": "@convId", "value": conversation_id}],
-        )
+        messages = self.dbcli.message_container.query_items_with_conversation(conversation_id)
         if not messages:
             logging.warning(f"No messages found for conversation {conversation_id}; skipping dealership email.")
         else:
             dealer_id = id_context.get("dealerId") or (messages[0].get("dealerId") if messages else None)
-            dealers = self.db.query_items(
-                "dealerships",
-                "SELECT * FROM c WHERE c.id = @id",
-                [{"name": "@id", "value": dealer_id}],
-            ) if dealer_id else []
+            dealer = self.dbcli.dealerships_container.get_item_with_id(dealer_id)
 
-            if not dealers:
+            if not dealer:
                 logging.error(f"Dealership not found for id {dealer_id}; skipping dealership email.")
             else:
-                dealership_email = dealers[0].get("email")
+                dealership_email = dealer.get("email")
                 if not dealership_email:
                     logging.error(f"No email on dealership record {dealer_id}.")
                 else:

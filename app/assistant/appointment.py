@@ -31,13 +31,7 @@ class Appointment(BaseAssistant):
             logging.error(f"Could not parse date string from LLM: {date_str} - {e}")
             return []
 
-        query = "SELECT * FROM c WHERE c.dealerId = @did AND c.appointmentDate = @date"
-        params = [
-            {"name": "@did", "value": dealer_id},
-            {"name": "@date", "value": strict_date_str}
-        ]
-
-        appointments = self.db.query_items("appointments", query, params)
+        appointments = self.dbcli.appointments_container.query_appointments_with_dealer_and_date(dealer_id, strict_date_str)
         booked_slots = [int(appt["timeslot"]) for appt in appointments]
 
         # base hours (9 AM to 5 PM)
@@ -205,17 +199,16 @@ class Appointment(BaseAssistant):
             "appointmentDate": date_str,
             "timeslot": str(timeslot)
         }
-        self.db.update_item_in_container("appointments", appt_doc)
+        self.dbcli.appointments_container.update_item_in_container(appt_doc)
         logging.warning(f"[BOOKING SUCCESS] Appointment written to DB for {date_str} at {timeslot}.")
 
         self.set_conversation_status(id_context["conversationId"], 0)
 
-        leads = self.db.query_items("leads", "SELECT * FROM c WHERE c.id=@id",
-                                    [{"name": "@id", "value": id_context["leadId"]}])
+        leads = self.dbcli.leads_container.get_item_with_id(id_context["leadId"])
         if leads:
             lead_doc = leads[0]
             lead_doc["status"] = 1
-            self.db.update_item_in_container("leads", lead_doc)
+            self.dbcli.leads_container.update_item_in_container(lead_doc)
 
         customer = self.hydrate_customer_context(id_context)
         vehicle = customer["vehicle"]

@@ -11,7 +11,7 @@ from app.assistant.gpt import GPTClient
 class BaseAssistant(GPTClient):
     def __init__(self):
         super().__init__()
-        self.db = CosmosDBClient()
+        self.dbcli = CosmosDBClient()
 
     # helper function to builds message document and stores it in cosmosdb
     def store_message(
@@ -31,7 +31,7 @@ class BaseAssistant(GPTClient):
             "subject": subject,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self.db.save_message(message_doc)
+        self.dbcli.message_container.save_message(message_doc)
         logging.info(f"Stored message: {doc_id}")
         return doc_id
 
@@ -39,20 +39,12 @@ class BaseAssistant(GPTClient):
     # but there is no chain match based on responseId
     def resolve_context_from_sender(self, sender: str):
         _, sender_email = parseaddr(sender)
-        leads = self.db.query_items(
-            "leads",
-            "SELECT * FROM c WHERE c.email = @email",
-            [{"name": "@email", "value": sender_email.lower()}],
-        )
+        leads = self.dbcli.leads_container.query_items_with_email(sender_email.lower())
         if not leads:
             logging.warning(f"No lead found for sender: {sender_email}")
             return None
         lead = leads[0]
-        conversations = self.db.query_items(
-            "conversations",
-            "SELECT * FROM c WHERE c.leadId = @leadId AND c.status = 1 ORDER BY c.timestamp DESC OFFSET 0 LIMIT 1",
-            [{"name": "@leadId", "value": lead["id"]}],
-        )
+        conversations = self.dbcli.conversation_container.query_items_with_lead(lead["id"])
         if not conversations:
             logging.warning(f"No active conversation for lead: {lead['id']}")
             return None
@@ -65,10 +57,10 @@ class BaseAssistant(GPTClient):
         }
 
     def set_conversation_status(self, conversation_id: str, status: int):
-        conversation = self.db.get_item_by_id(conversation_id, "conversations")
+        conversation = self.dbcli.conversation_container.get_item_with_id(conversation_id)
         if conversation:
             conversation["status"] = status
-            self.db.update_item_in_container("conversations", conversation)
+            self.dbcli.conversation_container.update_item_in_container(conversation)
             logging.info(f"Updated conversation {conversation_id} to status {status}")
         else:
             logging.error(f"Conversation not found for ID: {conversation_id}")
@@ -80,11 +72,9 @@ class BaseAssistant(GPTClient):
         vehicle_id = id_context["vehicleId"]
         dealer_id = id_context["dealerId"]
 
-        lead = self.db.query_items("leads", "SELECT * FROM c WHERE c.id=@id", [{"name": "@id", "value": lead_id}])
-        vehicle = self.db.query_items("vehicles", "SELECT * FROM c WHERE c.id=@id AND c.dealerId=@did",
-                                      [{"name": "@id", "value": vehicle_id}, {"name": "@did", "value": dealer_id}])
-        dealer = self.db.query_items("dealerships", "SELECT * FROM c WHERE c.id=@id",
-                                     [{"name": "@id", "value": dealer_id}])
+        lead = self.dbcli.leads_container.get_item_with_id(lead_id)
+        vehicle = self.dbcli.vehicle_container.query_items_with_vehicle_and_dealership(vehicle_id, dealer_id)
+        dealer = self.dbcli.dealerships_container.get_item_with_id(dealer_id)
 
         return {
             "conversationId": id_context["conversationId"],

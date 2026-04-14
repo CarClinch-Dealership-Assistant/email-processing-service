@@ -3,7 +3,7 @@ import os
 from azure.cosmos import CosmosClient, exceptions
 from azure.identity import DefaultAzureCredential
 
-class CosmosDBClient:
+class DBClient:
     def __init__(self):
         self.endpoint = os.getenv("COSMOS_ENDPOINT")
         self.database = os.getenv("COSMOS_DB_NAME")
@@ -65,18 +65,20 @@ class CosmosDBClient:
             logging.error(f"update_item_in_container failed for {item.get('id')}: {e.message}")
             return None
 
-class CosmosDBContainer(CosmosDBClient):
+class CosmosDBContainer(DBClient):
     def __init__(self, container_name: str):
         super().__init__()
         self.container_name = container_name
 
     def query_items_with_params(self, query: str, params: list[dict[str, str]]):
-        return self.query_items_from_container(self.container_name, query, params)
+        return self.query_items(self.container_name, query, params)
 
     def update_item(self, item: dict) -> dict:
         return self.update_item_in_container(self.container_name, item)
 
     def get_item_with_id(self, id: str) -> dict:
+        if id is None:
+            return None
         return self.get_item_by_id(id, self.container_name)
 
 class LeadsContainer(CosmosDBContainer):
@@ -124,3 +126,36 @@ class MessagesContainer(CosmosDBContainer):
         query = "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'"
         params = [{"name": "@msgId", "value": msg_id}]
         return self.query_items_with_params(query, params)
+
+    def query_user_items_with_conversation_and_time(self, conversation_id: str, startTime: str):
+        query = "SELECT * FROM c WHERE c.conversationId = @convId AND c.role = 'user' AND c.timestamp > @startTime"
+        params = [{"name": "@convId", "value": conversation_id}, {"name": "@startTime", "value": startTime}]
+        return self.query_items_with_params(query, params)
+
+    def query_items_with_conversation(self, conversation_id: str):
+        query = "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC"
+        params = [{"name": "@convId", "value": conversation_id}]
+        return self.query_items_with_params(query, params)
+
+class AppointmentsContainer(CosmosDBContainer):
+    container_appointments = "appointments"
+    def __init__(self):
+        super().__init__(self.container_appointments)
+
+    def query_appointments_with_dealer_and_date(self, dealer_id: str, date: str):
+        query = "SELECT * FROM c WHERE c.dealerId = @did AND c.appointmentDate = @date"
+        params = [
+            {"name": "@did", "value": dealer_id},
+            {"name": "@date", "value": date}
+        ]
+        return self.query_items_with_params(query, params)
+
+class CosmosDBClient():
+    def __init__(self):
+        self.message_container = MessagesContainer()
+        self.dealerships_container = DealershipsContainer()
+        self.vehicle_container = VehicleContainer()
+        self.conversation_container  = ConversationContainer()
+        self.leads_container = LeadsContainer()
+        self.appointments_container = AppointmentsContainer()
+
