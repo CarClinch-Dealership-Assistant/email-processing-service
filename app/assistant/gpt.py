@@ -49,6 +49,9 @@ class GPTClient:
     def build_user_message_prompt(self, content):
         return self.build_message_prompt(LLM_ROLE_USER, content)
 
+    def build_system_message_prompt(self, content):
+        return self.build_message_prompt(LLM_ROLE_SYSTEM, content)
+
     def get_LLM_user_role(self):
         return LLM_ROLE_USER
 
