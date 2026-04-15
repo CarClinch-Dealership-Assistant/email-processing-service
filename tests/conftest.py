@@ -1,26 +1,20 @@
+# tests/conftest.py
 import pytest
 from unittest.mock import MagicMock, patch
 from app.email.protocol import StandardEmail
 import app.assistant.gpt
-import app.assistant
-from app.assistant import Assistant
+from app.assistant.assistant import Assistant
+from app.database.cosmos import CosmosDBClient
 
 def _patched_init(self):
     app.assistant.gpt.GPTClient.__init__(self)
+    self.dbcli = CosmosDBClient()
 
 Assistant.__init__ = _patched_init
 
-@property
-def lazy_db(self):
-    if not hasattr(self, "_lazy_db"):
-        self._lazy_db = app.assistant.CosmosDBClient()
-    return self._lazy_db
-
-Assistant.db = lazy_db
-
 @pytest.fixture(autouse=True)
 def mock_cosmos():
-    with patch("app.database.cosmos.CosmosDBClient._init_client"):
+    with patch("app.database.cosmos.DBClient._init_client"):
         yield
 
 @pytest.fixture
@@ -38,7 +32,7 @@ def sample_customer():
             "year": 2021,
             "make": "Honda",
             "model": "Civic",
-            "status": 1,           # used
+            "status": 1,           
             "trim": "LX",
             "mileage": 45000,
             "transmission": "Automatic",
@@ -65,7 +59,7 @@ def sample_received_email():
         "subject": "Re: 2021 Honda Civic",
         "body": "Can I come in Saturday for a test drive?",
         "message_id": "<reply_001@mail.com>",
-        "in_reply_to": "<original_001@mail.com>",
+        "in_reply_to": "<original_001.conv_001@mail.com>",
         "source": "smtp",
     }
 
