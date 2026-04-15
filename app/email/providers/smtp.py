@@ -3,7 +3,10 @@ import logging
 import smtplib
 import imaplib
 import email
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from email.utils import parseaddr
 from email.header import decode_header
 from typing import List
@@ -17,10 +20,28 @@ class SmtpProvider:
         self.user = None
         self.password = None
 
-    def send(self, to: str, subject: str, body: str, msg_id: str = None) -> bool:
+    def _attach_files(self, msg: MIMEMultipart, attachments: list):
+        """Helper to process and attach files to the email payload"""
+        if not attachments:
+            return
+        for filename, content, mime_type in attachments:
+            maintype, subtype = mime_type.split("/", 1)
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(content.encode('utf-8') if isinstance(content, str) else content)
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            msg.attach(part)
+            
+    def send(self, to: str, subject: str, body: str, msg_id: str = None, attachments: list = None) -> bool:
         """Sending with SMTP"""
         try:
-            msg = MIMEText(body,"html", "utf-8")
+            if attachments:
+                msg = MIMEMultipart()
+                msg.attach(MIMEText(body, "html", "utf-8"))
+                self._attach_files(msg, attachments)
+            else:
+                msg = MIMEText(body, "html", "utf-8")
+                
             msg["Subject"] = subject
             msg["From"] = self.user
             msg["To"] = to
@@ -31,7 +52,7 @@ class SmtpProvider:
                 server.starttls()
                 server.login(self.user, self.password)
                 ret = server.send_message(msg)
-                logging.info(f"SMTP Send successfully: {ret}")
+                logging.info(f"SMTP Send successfully to {to}")
             return True
         except Exception as e:
             logging.error(f"SMTP Send Error: {e}")
@@ -202,7 +223,7 @@ class SmtpProvider:
 
         return results
 
-    def reply(self, sender: str, message_id: str, subject: str, body: str, msg_id: str = None) -> bool:
+    def reply(self, sender: str, message_id: str, subject: str, body: str, msg_id: str = None, attachments: list = None) -> bool:
         """
         :param sender: email receiver
         :param message_id: original Message-ID
@@ -213,17 +234,22 @@ class SmtpProvider:
             if not subject.lower().startswith("re:"):
                 subject = f"Re: {subject}"
 
-            msg = MIMEText(body,"html", "utf-8")
+            if attachments:
+                msg = MIMEMultipart()
+                msg.attach(MIMEText(body, "html", "utf-8"))
+                self._attach_files(msg, attachments)
+            else:
+                msg = MIMEText(body, "html", "utf-8")
+
             msg["Subject"] = subject
             msg["From"] = self.user
             msg["To"] = sender
+            
             if msg_id:
                 msg["Message-ID"] = msg_id
-
             if message_id:
                 if not message_id.startswith("<"):
                     message_id = f"<{message_id}>"
-
                 msg["In-Reply-To"] = message_id
                 msg["References"] = message_id
 

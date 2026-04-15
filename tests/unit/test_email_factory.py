@@ -1,3 +1,4 @@
+# tests/unit/test_email_factory.py
 import pytest
 from unittest.mock import patch
 from app.email.factory import EmailFactory
