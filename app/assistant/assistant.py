@@ -5,7 +5,7 @@ from app.assistant.escalation import Escalation
 from app.assistant.appointment import Appointment
 from app.assistant.prompts import CONTACT_USER_PROMPT, REPLY_USER_PROMPT, FOLLOWUP_USER_PROMPT
 from app.email.factory import EmailFactory, DEFAULT_EMAIL_PROVIDER
-from email.utils import make_msgid
+# from email.utils import make_msgid
 from app.assistant.template import build_email_template
 
 
@@ -28,6 +28,7 @@ class Assistant(Escalation, Appointment):
         }
 
         lead_notes = data.get("lead_notes", "").strip()
+        logging.warning(f"Initial contact from {customer_email} with lead notes: {lead_notes}")
         if lead_notes:
             self.store_message(id_context, None, None, self.get_LLM_user_role(), lead_notes, "Form Submission")
 
@@ -37,22 +38,24 @@ class Assistant(Escalation, Appointment):
 
         # process booking
         booking_context, is_finalized = self.process_booking_intent(analysis_results, id_context, customer_email)
+        logging.warning(f"[BOOKING CONTEXT] '{booking_context}'")
         if is_finalized: return
 
         # generate AI content
-        user_prompt = analysis_results.get("summary", "") + CONTACT_USER_PROMPT.format(**data) + booking_context
+        user_prompt = CONTACT_USER_PROMPT.format(**data) + booking_context
         prompts = self.get_default_message_prompt()
 
         prompts.append(self.build_user_message_prompt(user_prompt))
-
         response_id, raw_output, subject, body, raw_body = self.generate_parsed_ai_response(prompts)
 
+        body = self.inject_booking_tables(body)
+        
         # final escalation check
         if self.escalate(raw_output, customer_email, id_context): return
 
         # send and store
         subject, email_content = self.build_email_content(customer, subject, body)
-        msg_id = make_msgid()
+        msg_id = self.make_msgid(id_context["conversationId"])
 
         EmailFactory.get_provider(DEFAULT_EMAIL_PROVIDER).send(customer["lead"]["email"], subject, email_content, msg_id=msg_id)
         self.store_message(id_context, response_id, msg_id, self.get_LLM_assistant_role(), raw_body, subject)
@@ -63,20 +66,36 @@ class Assistant(Escalation, Appointment):
         # query for previous message to get id fields and responseId for chaining
         previous_response_id = None
         id_context = {}
-
         in_reply_to = received_email.get("in_reply_to", "")
 
         if in_reply_to:
-            msgs = self.dbcli.message_container.query_assistant_items_with_msg_id(in_reply_to)
-
-            if msgs:
-                previous_response_id = msgs[0].get("responseId")
-                id_context = {
-                    "conversationId": msgs[0].get("conversationId", ""),
-                    "leadId": msgs[0].get("leadId", ""),
-                    "vehicleId": msgs[0].get("vehicleId", ""),
-                    "dealerId": msgs[0].get("dealerId", ""),
-                }
+            logging.info(f"Parsing In-Reply-To header: {in_reply_to}")
+            
+            # extract conversationId from custom msg_id format: <random.convID@domain>
+            try:
+                clean_header = in_reply_to.strip("<>")
+                local_part = clean_header.split("@")[0]
+                if "." in local_part:
+                    extracted_conv_id = local_part.split(".")[1]
+                    
+                    logging.info(f"Extracted conversation ID: {extracted_conv_id}")
+                    
+                    # fix: single-partition lookup by conversationId
+                    conv = self.dbcli.conversation_container.get_item_with_id(extracted_conv_id)
+                    
+                    if conv:
+                         id_context = {
+                             "conversationId": conv["id"],
+                             "leadId": conv["leadId"],
+                             "vehicleId": conv["vehicleId"],
+                             "dealerId": conv["dealerId"],
+                         }
+                         
+                         msgs = self.dbcli.message_container.query_assistant_items_with_msg_id(in_reply_to, id_context["conversationId"])
+                         if msgs:
+                             previous_response_id = msgs[0].get("responseId")
+            except Exception as e:
+                logging.warning(f"Failed to parse smart msg_id from {in_reply_to}: {e}")
         # fallback to DB lookup if id_context not resolved from chain
         if not id_context:
             logging.warning(
@@ -104,6 +123,7 @@ class Assistant(Escalation, Appointment):
         )
 
         sender_email = received_email["sender"]
+        logging.warning(f"Received reply from {sender_email} with body: {stripped_body}")
 
         # analyze & escalate
         analysis_results, should_abort = self.analyze_and_check_escalation(stripped_body, sender_email, id_context,
@@ -114,22 +134,25 @@ class Assistant(Escalation, Appointment):
         booking_context, is_finalized = self.process_booking_intent(analysis_results, id_context, sender_email,
                                                                     received_email)
         if is_finalized: return
+        logging.warning(f"[BOOKING CONTEXT] '{booking_context}'")
 
         # generate AI content
-        user_prompt = analysis_results.get("summary", "") + REPLY_USER_PROMPT.format(
+        user_prompt = REPLY_USER_PROMPT.format(
             received_body=stripped_body) + booking_context
         prompts = self.get_default_message_prompt()
         prompts.append(self.build_user_message_prompt(user_prompt))
 
         response_id, raw_output, subject, body, raw_body = self.generate_parsed_ai_response(prompts,
                                                                                             previous_response_id)
-
+        
+        body = self.inject_booking_tables(body)
+        
         # final escalation check
         if self.escalate(raw_output, sender_email, id_context): return
 
         # send & store
         email_content = build_email_template(body)
-        msg_id = make_msgid()
+        msg_id = self.make_msgid(id_context["conversationId"])
 
         EmailFactory.get_provider(DEFAULT_EMAIL_PROVIDER).reply(sender_email, received_email["message_id"], received_email["subject"],
                                                  email_content, msg_id=msg_id)
@@ -165,7 +188,7 @@ class Assistant(Escalation, Appointment):
         # if sold, abort the follow-up sequence and close the conversation
         if customer["vehicle"].get("status") == 2:
             logging.info(f"Vehicle {customer['vehicle']['id']} sold. Aborting follow-up.")
-            self.set_conversation_status(conversation_id, 0)  # mark conversation inactive
+            self.set_conversation_status(conversation_id, id_context["leadId"], 0)  # mark conversation inactive
             return
 
         data = self.get_formatting_data(customer)
@@ -196,7 +219,7 @@ class Assistant(Escalation, Appointment):
 
         # send & store
         subject, email_content = self.build_email_content(customer, subject, body)
-        msg_id = make_msgid()
+        msg_id = self.make_msgid(id_context["conversationId"])
 
         EmailFactory.get_provider(DEFAULT_EMAIL_PROVIDER).send(customer["lead"]["email"], subject, email_content, msg_id=msg_id)
         self.store_message(id_context, response_id, msg_id, self.get_LLM_assistant_role(), raw_body, subject)

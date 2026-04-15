@@ -1,11 +1,12 @@
 import uuid
+import socket
 import logging
 import re
 from datetime import datetime, timezone
 from app.database.cosmos import CosmosDBClient
 from email.utils import parseaddr
 from bs4 import BeautifulSoup
-from app.assistant.template import build_email_template
+from app.assistant.template import build_email_template, build_date_table, build_time_table
 from app.assistant.gpt import GPTClient
 
 class BaseAssistant(GPTClient):
@@ -13,6 +14,12 @@ class BaseAssistant(GPTClient):
         super().__init__()
         self.dbcli = CosmosDBClient()
 
+    def make_msgid(self, conversation_id: str) -> str:
+        # generates: <randomhex.convID@domain.com>
+        domain = socket.getfqdn()
+        random_hex = uuid.uuid4().hex[:15]
+        return f"<{random_hex}.{conversation_id}@{domain}>"
+    
     # helper function to builds message document and stores it in cosmosdb
     def store_message(
         self, id_context, response_id, message_id, role, raw_output, subject
@@ -56,11 +63,12 @@ class BaseAssistant(GPTClient):
             "dealerId": conversation["dealerId"],
         }
 
-    def set_conversation_status(self, conversation_id: str, status: int):
-        conversation = self.dbcli.conversation_container.get_item_with_id(conversation_id)
+    def set_conversation_status(self, conversation_id: str, lead_id: str, status: int):
+        conversation = self.dbcli.conversation_container.get_conversation_by_lead(conversation_id, lead_id)
+        
         if conversation:
             conversation["status"] = status
-            self.dbcli.conversation_container.update_item_in_container(conversation)
+            self.dbcli.conversation_container.update_item(conversation)
             logging.info(f"Updated conversation {conversation_id} to status {status}")
         else:
             logging.error(f"Conversation not found for ID: {conversation_id}")
@@ -73,14 +81,15 @@ class BaseAssistant(GPTClient):
         dealer_id = id_context["dealerId"]
 
         lead = self.dbcli.leads_container.get_item_with_id(lead_id)
-        vehicle = self.dbcli.vehicle_container.query_items_with_vehicle_and_dealership(vehicle_id, dealer_id)
+        # vehicle returns a list because it uses query_items
+        vehicle = self.dbcli.vehicle_container.query_items_with_vehicle_and_dealership(vehicle_id, dealer_id) 
         dealer = self.dbcli.dealerships_container.get_item_with_id(dealer_id)
-
+        logging.info(f"Hydrated context for lead {lead}, vehicle {vehicle}, dealer {dealer}")
         return {
             "conversationId": id_context["conversationId"],
-            "lead": lead[0] if lead else {},
-            "vehicle": vehicle[0] if vehicle else {},
-            "dealership": dealer[0] if dealer else {}
+            "lead": lead if lead else {},                  
+            "vehicle": vehicle[0] if vehicle else {},      
+            "dealership": dealer if dealer else {}        
         }
 
     # ==========================================
@@ -153,7 +162,9 @@ class BaseAssistant(GPTClient):
         return (subject, body)
 
     def fmt_time(self, h: int) -> str:
-        if h < 12:
+        if h == 0:
+            return "12:00 AM"
+        elif h < 12:
             return f"{h}:00 AM"
         elif h == 12:
             return "12:00 PM"
@@ -179,3 +190,16 @@ class BaseAssistant(GPTClient):
         raw_body = raw_output.split("\n", 1)[1] if "\n" in raw_output else ""
 
         return resp.id, raw_output, subject, body, raw_body
+    
+    def inject_booking_tables(self, email_body: str) -> str:
+        if hasattr(self, "_pending_date_candidates") and self._pending_date_candidates:
+            table_html = build_date_table(self._pending_date_candidates)
+            email_body = email_body.replace("[[DATE_TABLE]]", table_html)
+            self._pending_date_candidates = None
+
+        if hasattr(self, "_pending_time_labels") and self._pending_time_labels:
+            table_html = build_time_table(self._pending_time_labels)
+            email_body = email_body.replace("[[TIME_TABLE]]", table_html)
+            self._pending_time_labels = None
+
+        return email_body
