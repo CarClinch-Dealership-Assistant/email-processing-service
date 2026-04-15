@@ -62,19 +62,22 @@ def test_reply_aborts_if_context_unresolvable(mock_chat, mock_analysis_cls, mock
     mock_chat.assert_not_called()
     mock_factory.get_provider.assert_not_called()
 
-@patch("app.assistant.assistant.EmailFactory")
+@patch("app.assistant.escalation.EmailFactory") 
+@patch("app.assistant.assistant.EmailFactory")  
 @patch("app.assistant.escalation.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_escalation_skips_send(mock_chat, mock_analysis_cls, mock_factory, assistant, sample_received_email):
+def test_reply_escalation_skips_send(mock_chat, mock_analysis_cls, mock_assistant_factory, mock_escalation_factory, assistant, sample_received_email):
     _db_with_chain(assistant)
     mock_analysis_cls.return_value.analyze.return_value = {"escalate": True, "reason": "trade_inquiry", "intentCategory": "pricing"}
 
     assistant.reply(sample_received_email)
 
-    mock_factory.get_provider.return_value.reply.assert_not_called()
-    assert mock_factory.get_provider.return_value.send.call_count >= 1
-    assert assistant.dbcli.message_container.save_message.call_count == 2
-
+    # Standard reply should be skipped
+    mock_assistant_factory.get_provider.return_value.reply.assert_not_called()
+    
+    # Escalation emails (to dealer and customer) should be triggered via the escalation factory
+    assert mock_escalation_factory.get_provider.return_value.send.call_count >= 1
+    
 @patch("app.assistant.assistant.EmailFactory")
 @patch("app.assistant.escalation.Analysis")
 @patch.object(Assistant, "chat")

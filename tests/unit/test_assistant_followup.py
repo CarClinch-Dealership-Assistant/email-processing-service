@@ -19,6 +19,7 @@ ID_CONTEXT = {
 }
 
 SAMPLE_CUSTOMER_ROWS = {
+    "conversationId": "conv_001",  # <-- ADD THIS LINE
     "lead": {"id": "lead_001", "fname": "Alice", "email": "alice@example.com", "notes": ""},
     "vehicle": {"id": "veh_001", "year": 2021, "make": "Honda", "model": "Civic", "status": 1,
                 "trim": "LX", "mileage": 45000, "transmission": "Automatic", "comments": ""},

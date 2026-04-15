@@ -114,6 +114,9 @@ def test_generate_ics(assistant):
 def test_finalize_booking_sends_emails_and_updates_db(mock_factory, assistant, sample_customer):
     assistant.hydrate_customer_context = MagicMock(return_value=sample_customer)
     
+    # Mock the lead lookup so dictionary assignment inside the method doesn't fail
+    assistant.dbcli.leads_container.get_item_with_id.return_value = {"id": "lead_001", "status": 0}
+    
     parsed = {"date": "2024-05-15", "timeslot": 14}
     
     assistant.finalize_booking(ID_CONTEXT, parsed, "alice@example.com")
