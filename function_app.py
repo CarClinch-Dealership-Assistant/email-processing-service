@@ -8,6 +8,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 from app.email.factory import EmailFactory
 from app.assistant import Assistant
+
 load_dotenv()
 
 # env variables for follow-up timer configuration

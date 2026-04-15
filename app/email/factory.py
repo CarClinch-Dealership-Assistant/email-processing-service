@@ -3,6 +3,8 @@ from .providers.acs import AcsProvider
 from .providers.graph import GraphProvider
 from .protocol import EmailProvider
 
+DEFAULT_EMAIL_PROVIDER = "gmail"
+
 class EmailFactory:
     _map = {
         "gmail": GmailProvider,
