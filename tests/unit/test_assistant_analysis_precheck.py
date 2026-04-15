@@ -27,10 +27,11 @@ def _routine_analysis():
 def _escalating_analysis():
     return {**_routine_analysis(), "escalate": True, "intentCategory": "pricing"}
 
+@patch("app.assistant.escalation.EmailFactory")
 @patch("app.assistant.assistant.EmailFactory")
 @patch("app.assistant.escalation.Analysis")
 @patch.object(Assistant, "chat")
-def test_contact_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mock_factory, assistant, sample_customer):
+def test_contact_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mock_assistant_factory, mock_escalation_factory, assistant, sample_customer):
     mock_analysis_cls.return_value.analyze.return_value = _escalating_analysis()
     assistant.dbcli.conversation_container.get_item_with_id.return_value = {"id": "conv_001", "status": 1}
 
@@ -48,10 +49,11 @@ def test_contact_routine_analysis_proceeds_to_chat(mock_chat, mock_analysis_cls,
     assistant.contact(sample_customer)
     mock_chat.assert_called_once()
 
+@patch("app.assistant.escalation.EmailFactory")
 @patch("app.assistant.assistant.EmailFactory")
 @patch("app.assistant.escalation.Analysis")
 @patch.object(Assistant, "chat")
-def test_reply_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mock_factory, assistant, sample_received_email):
+def test_reply_analysis_escalation_skips_chat(mock_chat, mock_analysis_cls, mock_assistant_factory, mock_escalation_factory, assistant, sample_received_email):
     mock_analysis_cls.return_value.analyze.return_value = _escalating_analysis()
     assistant.dbcli.conversation_container.get_item_with_id.return_value = {"id": "conv_001", "leadId": "lead_001", "vehicleId": "veh_001", "dealerId": "dealer_001", "status": 1}
     assistant.dbcli.message_container.query_assistant_items_with_msg_id.return_value = [{"responseId": "resp_prev"}]
