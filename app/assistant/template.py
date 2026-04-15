@@ -1,5 +1,6 @@
 import html as html_lib
 from dateutil import parser, tz
+from datetime import date as date_type
 
 content = """
 <!DOCTYPE html>
@@ -213,109 +214,168 @@ time_table_wrapper = """
 
 
 def build_date_table(iso_dates: list[str]) -> str:
-    from datetime import date as date_type
-    rows = ""
-    for d in iso_dates:
-        parsed = date_type.fromisoformat(d)
-        rows += date_table_row.format(
-            day_name=parsed.strftime("%A"),
-            date_display=parsed.strftime("%B %d, %Y"),
-        )
-    return date_table_wrapper.format(rows=rows)
+  """
+  Builds an HTML table for displaying a list of dates.
+  
+  Args:
+    iso_dates (list[str]): A list of date strings in ISO format (YYYY-MM-DD).
+    
+  Returns:
+    str: An HTML string representing a table of the provided dates, formatted with day names and human-readable date formats.
+  """
+  rows = ""
+  for d in iso_dates:
+      parsed = date_type.fromisoformat(d)
+      rows += date_table_row.format(
+          day_name=parsed.strftime("%A"),
+          date_display=parsed.strftime("%B %d, %Y"),
+      )
+  return date_table_wrapper.format(rows=rows)
 
 
 def build_time_table(time_labels: list[str]) -> str:
-    rows = ""
-    for t in time_labels:
-        rows += time_table_row.format(time_display=t)
-    return time_table_wrapper.format(rows=rows)
+  """
+  Builds an HTML table for displaying a list of time labels.
+  
+  Args:
+    time_labels (list[str]): A list of time strings.
+    
+  Returns:
+    str: An HTML string representing a table of the provided time labels.
+  """
+  rows = ""
+  for t in time_labels:
+      rows += time_table_row.format(time_display=t)
+  return time_table_wrapper.format(rows=rows)
 
 
 def build_confirmation_email_template(vehicle: dict, appointment_date: str, appointment_time: str) -> str:
-    body = confirmation_body.format(
-        vehicle_year=vehicle["year"],
-        vehicle_make=vehicle["make"],
-        vehicle_model=vehicle["model"],
-        appointment_date=appointment_date,
-        appointment_time=appointment_time,
-    )
-    return build_email_template(body)
+  """
+  Builds an HTML email template for confirming a vehicle appointment.
+  
+  Args:
+    vehicle (dict): A dictionary containing vehicle information.
+    appointment_date (str): The date of the appointment.
+    appointment_time (str): The time of the appointment.
+    
+  Returns:
+    str: An HTML string representing the confirmation email template.
+  """
+  body = confirmation_body.format(
+      vehicle_year=vehicle["year"],
+      vehicle_make=vehicle["make"],
+      vehicle_model=vehicle["model"],
+      appointment_date=appointment_date,
+      appointment_time=appointment_time,
+  )
+  return build_email_template(body)
 
 
 def build_dealer_notification_template(lead: dict, vehicle: dict, appointment_date: str, appointment_time: str, conversation_id: str) -> str:
-    body = dealer_notification_body.format(
-        lead_name=f"{lead.get('fname', '')} {lead.get('lname', '')}".strip(),
-        lead_email=lead.get("email", ""),
-        vehicle_year=vehicle["year"],
-        vehicle_make=vehicle["make"],
-        vehicle_model=vehicle["model"],
-        appointment_date=appointment_date,
-        appointment_time=appointment_time,
-        conversation_id=conversation_id,
-    )
-    return build_email_template(body)
+  """
+  Builds an HTML email template for notifying a dealer about a new vehicle appointment.
+  
+  Args:
+    lead (dict): A dictionary containing lead information.
+    vehicle (dict): A dictionary containing vehicle information.
+    appointment_date (str): The date of the appointment.
+    appointment_time (str): The time of the appointment.
+    conversation_id (str): The ID of the conversation.
+    
+  Returns:
+    str: An HTML string representing the dealer notification email template.
+  """
+  body = dealer_notification_body.format(
+      lead_name=f"{lead.get('fname', '')} {lead.get('lname', '')}".strip(),
+      lead_email=lead.get("email", ""),
+      vehicle_year=vehicle["year"],
+      vehicle_make=vehicle["make"],
+      vehicle_model=vehicle["model"],
+      appointment_date=appointment_date,
+      appointment_time=appointment_time,
+      conversation_id=conversation_id,
+  )
+  return build_email_template(body)
 
 def build_escalation_email_template(conversation_id: str, customer_email: str, parsed: dict, messages: list) -> tuple[str, str]:
-    intent_category = parsed.get("intentCategory", "Unknown")
-    escalation_reason = parsed.get("reason", parsed.get("summary", "No reason provided"))
-    parsed_block = "<br/>".join(f"<strong>{k}:</strong> {v}" for k, v in parsed.items())
+  """
+  Builds an HTML email template for escalating a conversation to a human agent, including details about the escalation and the conversation history.
+  
+  Args:
+    conversation_id (str): The ID of the conversation being escalated.
+    customer_email (str): The email address of the customer involved in the conversation.
+    parsed (dict): A dictionary containing parsed information about the escalation.
+    messages (list): A list of message dictionaries representing the conversation history.
+    
+  Returns:
+    tuple[str, str]: A tuple containing the email subject and the HTML body of the escalation email.
+  """
+  intent_category = parsed.get("intentCategory", "Unknown")
+  escalation_reason = parsed.get("reason", parsed.get("summary", "No reason provided"))
+  parsed_block = "<br/>".join(f"<strong>{k}:</strong> {v}" for k, v in parsed.items())
 
-    thread_rows = ""
+  thread_rows = ""
 
-    # Define Eastern Time for the local conversion
-    eastern_tz = tz.gettz("America/Toronto")
+  # Define Eastern Time for the local conversion
+  eastern_tz = tz.gettz("America/Toronto")
 
-    for msg in messages:
-        role = msg.get("role", "unknown").capitalize()
-        raw_timestamp = msg.get("timestamp", "")
-        formatted_timestamp = raw_timestamp
-        if raw_timestamp:
-            try:
-                dt = parser.parse(raw_timestamp)
-                dt_local = dt.astimezone(eastern_tz)
-                formatted_timestamp = dt_local.strftime("%b %d, %Y at %I:%M %p %Z")
-            except Exception:
-                pass
+  for msg in messages:
+      role = msg.get("role", "unknown").capitalize()
+      raw_timestamp = msg.get("timestamp", "")
+      formatted_timestamp = raw_timestamp
+      if raw_timestamp:
+          try:
+              dt = parser.parse(raw_timestamp)
+              dt_local = dt.astimezone(eastern_tz)
+              formatted_timestamp = dt_local.strftime("%b %d, %Y at %I:%M %p %Z")
+          except Exception:
+              pass
 
-        body = html_lib.escape(msg.get("body", "").replace("<br />", "\n").strip())
-        subject_line = html_lib.escape(msg.get("subject", ""))
+      body = html_lib.escape(msg.get("body", "").replace("<br />", "\n").strip())
+      subject_line = html_lib.escape(msg.get("subject", ""))
 
-        bg = "#f9f3ee" if role == "Assistant" else "#f0f4fb"
-        label_color = "#7a3c1e" if role == "Assistant" else "#1a3a6b"
-        
-        subject_line_html = (
-            f"<div style='font-size:12px;color:#666;margin-bottom:4px;'>Subject: {subject_line}</div>"
-            if subject_line else ""
-        )
+      bg = "#f9f3ee" if role == "Assistant" else "#f0f4fb"
+      label_color = "#7a3c1e" if role == "Assistant" else "#1a3a6b"
+      
+      subject_line_html = (
+          f"<div style='font-size:12px;color:#666;margin-bottom:4px;'>Subject: {subject_line}</div>"
+          if subject_line else ""
+      )
 
-        thread_rows += thread_row_content.format(
-            bg=bg,
-            label_color=label_color,
-            role=role,
-            timestamp=formatted_timestamp,
-            subject_line_html=subject_line_html,
-            body=body,
-        )
+      thread_rows += thread_row_content.format(
+          bg=bg,
+          label_color=label_color,
+          role=role,
+          timestamp=formatted_timestamp,
+          subject_line_html=subject_line_html,
+          body=body,
+      )
 
-    email_html = escalation_content.format(
-        conversation_id=conversation_id,
-        customer_email=customer_email,
-        intent_category=intent_category,
-        escalation_reason=escalation_reason,
-        parsed_block=parsed_block,
-        thread_rows=thread_rows,
-    )
+  email_html = escalation_content.format(
+      conversation_id=conversation_id,
+      customer_email=customer_email,
+      intent_category=intent_category,
+      escalation_reason=escalation_reason,
+      parsed_block=parsed_block,
+      thread_rows=thread_rows,
+  )
 
-    subject = f"[Escalation] {intent_category} — {customer_email} — ID: {conversation_id[-6:]}"
-    return subject, email_html
+  subject = f"[Escalation] {intent_category} — {customer_email} — ID: {conversation_id[-6:]}"
+  return subject, email_html
 
 
 def build_ack_email_template() -> str:
-    return ack_content.format(
-        message=(
-            "Thank you for your message. A member of our team will be reaching out to you shortly to assist you further. We appreciate your patience!"
-        )
+  """
+  Builds an HTML email template for acknowledging receipt of a customer's message after an escalation.
+  """
+  return ack_content.format(
+      message=(
+          "Thank you for your message. A member of our team will be reaching out to you shortly to assist you further. We appreciate your patience!"
+      )
     )
 
 def build_email_template(customer):
-    return content.format(customer=customer)
+  """
+  Builds an HTML email template for a customer.
+  """
+  return content.format(customer=customer)

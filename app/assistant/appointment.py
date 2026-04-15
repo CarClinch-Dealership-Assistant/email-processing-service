@@ -13,13 +13,31 @@ from dateutil import parser
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
 class Appointment(BaseAssistant):
+    """
+    The Appointment class handles the logic related to scheduling appointments.
+    The Appointment class is responsible for:
+    - Parsing the LLM's output to extract requested appointment dates and times.
+    - Querying the database for existing appointments to determine available timeslots.
+    - Building context strings to guide the LLM in requesting dates, times, or confirming bookings.
+    - Finalizing the booking by writing to the database, sending confirmation emails, and updating conversation status.
+    - Generating ICS calendar invites for confirmed appointments.
+    - Implementing safeguards to handle cases where the LLM may provide incomplete information (e.g., a time without a date) and prompting accordingly.
+    """
     def __init__(self):
        super().__init__()
 
-   # ==========================================
-   # APPOINTMENT & BOOKING SYSTEM
-   # ==========================================
     def get_available_timeslots(self, dealer_id: str, date_str: str, time_range: list = None) -> list[int]:
+        """
+        Queries the database for existing appointments to calculate available timeslots.
+
+        Args:
+            dealer_id (str): The dealership's unique identifier.
+            date_str (str): The requested date in YYYY-MM-DD format.
+            time_range (list, optional): A two-item list representing [start_hour, end_hour].
+
+        Returns:
+            list[int]: A list of available integers representing 24-hour clock times.
+        """
         # if a comma-separated list, just grab the very first date
         if date_str and "," in date_str:
             date_str = date_str.split(",")[0].strip()
@@ -64,6 +82,15 @@ class Appointment(BaseAssistant):
         return available
 
     def get_candidate_dates(self, date_range_str: str = "") -> list[str]:
+        """ 
+        Parses the date string from the LLM and returns a list of candidate dates in YYYY-MM-DD format.
+        
+        Args:
+            date_range_str (str): The raw date string from the LLM, which could be a single date, a comma-separated list of dates, or an empty string.
+            
+        Returns:
+            list[str]: A list of candidate date strings in YYYY-MM-DD format. If parsing fails, returns the next 5 business days.
+        """
         candidates = []
 
         # if the LLM passed a string split and clean it
@@ -92,6 +119,16 @@ class Appointment(BaseAssistant):
         return candidates
 
     def build_request_date_context(self, action: str, analysis_results: dict):
+        """
+        Builds the date context for the appointment request based on the LLM's analysis.
+        
+        Args:
+            action (str): The intent action determined by the analysis (e.g., "request_date" or "request_date_range").
+            analysis_results (dict): The full analysis results from the LLM, which may contain the raw date string and requested time.
+        
+        Returns:
+            str: The formatted context string to be included in the LLM prompt for requesting dates.
+        """
         dates_str_from_llm = analysis_results.get("appointmentDate", "")
         candidates = self.get_candidate_dates(dates_str_from_llm)
 
@@ -113,6 +150,16 @@ class Appointment(BaseAssistant):
         )
 
     def build_request_time_context(self, dealer_id: str, analysis_results: dict):
+        """
+        Builds the time context for the appointment request based on the LLM's analysis.
+        
+        Args:
+            dealer_id (str): The ID of the dealer for which to check availability.
+            analysis_results (dict): The full analysis results from the LLM, which may contain the requested date and time range.
+        
+        Returns:
+            str: The formatted context string to be included in the LLM prompt for requesting times.
+        """
         date_str = analysis_results.get("appointmentDate")
         time_range = analysis_results.get("preferredTimeRange")
         avail_slots = self.get_available_timeslots(dealer_id, date_str, time_range)
@@ -134,6 +181,16 @@ class Appointment(BaseAssistant):
         )
 
     def build_booking_context(self, action: str, dealer_id: str, analysis_results: dict) -> str:
+        """ 
+        Builds the appropriate context string for the LLM based on the booking intent action and analysis results.
+        
+        Args:
+            action (str): The intent action determined by the analysis (e.g., "request_date", "request_time", "confirm_booking").
+            dealer_id (str): The ID of the dealer for which to check availability if needed.
+            analysis_results (dict): The full analysis results from the LLM, which may contain requested dates, times, and intent category and action.
+        Returns:
+            str: The formatted context string to be included in the LLM prompt for guiding the booking flow.
+        """
         if action in ["request_date", "request_date_range"]:
             return self.build_request_date_context(action, analysis_results)
 
@@ -143,6 +200,18 @@ class Appointment(BaseAssistant):
         return ""
 
     def generate_ics(self, dealership: dict, vehicle: dict, date_str: str, timeslot_int: int) -> str:
+        """
+        Generates an ICS calendar invite string for the appointment.
+        
+        Args:
+            dealership (dict): The dealership information, expected to contain 'name' and 'address1' and 'city'.
+            vehicle (dict): The vehicle information, expected to contain 'year', 'make', and 'model'.
+            date_str (str): The appointment date in YYYY-MM-DD format.
+            timeslot_int (int): The appointment time as an integer hour in 24-hour format (e.g., 14 for 2 PM).
+        
+         Returns:
+            str: The generated ICS calendar invite string.
+        """
         dt_start = datetime.strptime(f"{date_str} {timeslot_int:02d}:00", "%Y-%m-%d %H:%M")
         dt_end = dt_start + timedelta(hours=1)
 
@@ -179,6 +248,18 @@ class Appointment(BaseAssistant):
 
     def finalize_booking(self, id_context: dict, parsed_output: dict, customer_email: str,
                          received_email: dict = None):
+        """ 
+        Finalizes the appointment booking by writing to the database, sending confirmation emails, and updating conversation status.
+        
+        Args:
+            id_context (dict): The conversation context containing leadId, dealerId, vehicleId, and conversationId.
+            parsed_output (dict): The parsed output containing the appointment date and time.
+            customer_email (str): The email address of the customer.
+            received_email (dict, optional): The received email information for replying.
+        
+        Returns:
+            None
+        """
         date_str = parsed_output.get("date")
         timeslot = parsed_output.get("timeslot")
 
@@ -267,7 +348,20 @@ class Appointment(BaseAssistant):
 
     def process_booking_intent(self, analysis_results: dict, id_context: dict, email_address: str,
                                raw_email_data: dict = None) -> tuple[str, bool]:
-        """Runs safeguards, handles confirm_booking, and returns (booking_context_string, is_finalized)"""
+        """
+        Processes the booking intent from the LLM's analysis results and determines the appropriate context to return for the next prompt.
+        
+        Args:
+            analysis_results (dict): The full analysis results from the LLM, which should contain the intent category, intent action, and any extracted entities such as appointmentDate and appointmentTime.
+            id_context (dict): The conversation context containing leadId, dealerId, vehicleId, and conversationId.
+            email_address (str): The customer's email address for sending any necessary emails during the booking flow
+            raw_email_data (dict, optional): The raw email data if this is being called from a reply flow, which may be needed for replying to the correct email thread.
+        
+        Returns:
+            tuple: (booking_context, booking_finalized) where:
+                - booking_context (str): The context string to be included in the next LLM prompt to guide the booking flow. This could be instructions for requesting dates, times, or confirming the booking.
+                - booking_finalized (bool): A boolean indicating whether the booking was finalized in this step (i.e., the LLM provided all necessary information and the system was able to finalize the booking). If True, the context can be ignored as the flow is complete.
+        """
         booking_context = ""
         if analysis_results.get("intentCategory") != "appointment":
             return booking_context, False
