@@ -111,6 +111,8 @@ If the lead wants to book a test drive or appointment, set intentCategory to "ap
 - Appointments must fall precisely on the hour (e.g., "9 am", "9:00 AM", "4 PM", "16:00"). If the requested time includes minutes other than :00 (e.g., "4:30 PM", "9:15 AM"), it is invalid → set `appointmentTime` to null, set intentAction to `request_time`, and note the issue in `summary`.
 - Conversational exact hours ("at 9 am", "around 11", "at 2") DO count as specific valid times. Convert them to the appropriate 24-hour integer format (e.g., 9 AM = 9, 2 PM = 14) and set as `appointmentTime`.
 - Fuzzy times ("morning", "afternoon", "evening", "first thing") and hour windows ("between 9 and 1") are NOT specific times → extract into `preferredTimeRange` as [startHour, endHour]. Mappings: morning=[9,12], afternoon=[12,16], evening=[16,17].
+- **CRITICAL:** If a fuzzy time or time window is requested, `appointmentTime` MUST be null. Do NOT extract the start of a window (e.g., 9 from the morning window) as an exact `appointmentTime`.
+- General inquiries about availability (e.g., "What time do you have?", "When are you free?") do NOT count as exact times. Set `appointmentTime` to null.
 
 **Date rules:**
 - Dates must be valid calendar dates (e.g., November 31st is invalid; February 29th is only valid in leap years). 
