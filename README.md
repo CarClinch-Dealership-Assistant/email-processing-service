@@ -13,15 +13,16 @@ A serverless, AI-driven email processing engine to automate dealership-lead emai
 
 ```text
 email-processing-service/
-├── .github/workflows/          # CI/CD pipelines (Pytest and Azure Deployment)
+├── .github/workflows/          # CI/CD pipelines (Pytest and Docker Hub)
 ├── app/
-│   ├── assistant/              # Core Artificial Intelligence and Business Logic
+│   ├── assistant/              # Core AI and Business Logic
 │   │   ├── analysis.py         # Intent and sentiment extraction
 │   │   ├── appointment.py      # Scheduling logic and .ics generation
 │   │   ├── escalation.py       # Human hand-off protocols
 │   │   ├── gpt.py              # OpenAI API client wrapper
 │   │   ├── prompts.py          # System instructions for the LLM
-│   │   └── assistant.py        # The unified Assistant facade
+│   │   ├── base.py             # General helper methods
+│   │   └── assistant.py        # The logic hub
 │   ├── database/
 │   │   ├── cosmos.py           # Azure Cosmos DB client and container queries
 │   │   └── models.py           # Data schemas
@@ -29,9 +30,9 @@ email-processing-service/
 │       ├── factory.py          # Email Provider Factory pattern
 │       ├── processor.py        # Normalizes inbound email payloads
 │       ├── protocol.py         # Standardized email data models
-│       └── providers/          # SMTP, Graph, and ACS implementations
+│       └── providers/          # SMTP, Graph, and ACS implementations/stubs
 ├── tests/unit/                 # Pytest suite with isolated, mocked dependencies
-├── function_app.py             # Azure Functions HTTP and Timer Triggers
+├── function_app.py             # Azure Durable Functions
 ├── Dockerfile                  # Containerized deployment definition
 └── requirements.txt            # Python dependencies
 ```
@@ -115,4 +116,3 @@ This application is configured for continuous integration and continuous deploym
 1. Provisions the requisite Python environment.
 2. Executes the complete `pytest` suite to ensure code integrity.
 3. Compiles the Docker container image.
-```
