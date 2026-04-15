@@ -11,6 +11,14 @@ from app.assistant.base import BaseAssistant
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
 class Escalation(BaseAssistant):
+    """
+    The Escalation class handles the logic related to escalating leads to human agents.
+    The Escalation class is responsible for:
+    - Analyzing the LLM's output to determine if escalation is needed based on intent category, action, and a specific "escalate" flag.
+    - Storing a durable escalation record in the database for tracking and auditing purposes.
+    - Sending escalation emails to the dealership and optionally to an admin email, including relevant context and conversation history.
+    - Acknowledging the customer with a confirmation email to ensure they are not left waiting without feedback.
+    """
     def __init__(self):
         super().__init__()
 

@@ -12,12 +12,30 @@ from app.assistant.template import build_email_template
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
 class Assistant(Escalation, Appointment):
+    """
+    Main assistant class that inherits from both Escalation and Appointment to handle all related functionalities. Directly called by the Durable Function orchestration.
+    The Assistant class is responsible for:
+        - Handling initial contact from lead form intake via the `contact` method.
+        - Processing subsequent replies from leads via the `reply` method.
+        - Managing follow-up sequences via the `follow_up` method.
+    """
     def __init__(self):
         super().__init__()
 
-        # for initial contact from lead form intake
-
     def contact(self, customer: dict):
+        """
+        Initiates the first outreach to a new lead based on form intake data.
+
+        Args:
+            customer (dict): The complete hydrated customer record. Expected keys:
+                - conversationId (str)
+                - lead (dict): Must contain 'id', 'fname', 'email', 'notes'
+                - vehicle (dict): Must contain 'id', 'year', 'make', 'model', 'status', 'trim', 'mileage', 'transmission', 'comments'
+                - dealership (dict): Must contain 'id', 'name', 'email', 'phone', 'address1', 'city', 'province', 'postal_code'
+
+        Returns:
+            None
+        """
         data = self.get_formatting_data(customer)
         customer_email = data["customer_email"]
         id_context = {
@@ -67,6 +85,20 @@ class Assistant(Escalation, Appointment):
         # for subsequent replies from lead
 
     def reply(self, received_email: dict):
+        """
+        Processes a subsequent reply from an existing lead and generates the AI's response.
+
+        Args:
+            received_email (dict): The normalized inbound email payload. Expected keys:
+                - in_reply_to (str): The Message-ID of the previous email.
+                - sender (str): The lead's email address.
+                - body (str): The raw HTML or plain text email body.
+                - message_id (str): The unique ID of the inbound email.
+                - subject (str): The email subject line.
+
+        Returns:
+            dict: The resolved id_context dictionary for the conversation, or None if aborted.
+        """
         # query for previous message to get id fields and responseId for chaining
         previous_response_id = None
         id_context = {}
@@ -167,8 +199,18 @@ class Assistant(Escalation, Appointment):
 
         return id_context
 
-    # for followup sequence
     def follow_up(self, id_context: dict, sequence: int, start_time: str):
+        """
+        Executes a scheduled follow-up sequence if the lead has not responded.
+
+        Args:
+            id_context (dict): The identifiers mapping the conversation, lead, vehicle, and dealer.
+            sequence (int): The current follow-up iteration (e.g., 1, 2, or 3).
+            start_time (str): The ISO-formatted timestamp of when the follow-up timer began.
+
+        Returns:
+            bool: True if the follow-up email was sent, False if the sequence was aborted.
+        """
         logging.info(f"Starting follow-up sequence {sequence} for conversation {id_context.get('conversationId')}")
         conversation_id = id_context.get("conversationId")
 
