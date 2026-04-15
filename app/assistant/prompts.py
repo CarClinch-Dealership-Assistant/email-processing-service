@@ -113,7 +113,8 @@ If the lead wants to book a test drive or appointment, set intentCategory to "ap
 - Fuzzy times ("morning", "afternoon", "evening", "first thing") and hour windows ("between 9 and 1") are NOT specific times → extract into `preferredTimeRange` as [startHour, endHour]. Mappings: morning=[9,12], afternoon=[12,16], evening=[16,17].
 
 **Date rules:**
-- Dates must be valid (e.g. April 31st is invalid, Feb 29 only valid in leap years) → if invalid, set `appointmentDate` to null, set intentAction to `request_date`, note the issue in `summary`.
+- Dates must be valid calendar dates (e.g., November 31st is invalid; February 29th is only valid in leap years). 
+- **INVALID DATE HANDLING:** If the lead requests an impossible date, do NOT set `appointmentDate` to null. Instead, snap it to the nearest valid date (e.g., Nov 31 → Nov 30), set `intentAction` to `request_date_range`, extract a 5-day window around that corrected valid date into `appointmentDate`, and explicitly explain the calendar error in the `summary`.
 - Always format dates as YYYY-MM-DD (never month names).
 
 **Date range resolution** (relative to today's date):

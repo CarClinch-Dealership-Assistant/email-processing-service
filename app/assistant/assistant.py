@@ -41,8 +41,12 @@ class Assistant(Escalation, Appointment):
         logging.warning(f"[BOOKING CONTEXT] '{booking_context}'")
         if is_finalized: return
 
+        # extract the summary for injection
+        ai_summary = analysis_results.get("summary", "")
+        summary_context = f"\n[SYSTEM ANALYSIS OF LEAD'S MESSAGE: {ai_summary}]\n" if ai_summary else ""
+        
         # generate AI content
-        user_prompt = CONTACT_USER_PROMPT.format(**data) + booking_context
+        user_prompt = CONTACT_USER_PROMPT.format(**data) + summary_context + booking_context
         prompts = self.get_default_message_prompt()
 
         prompts.append(self.build_user_message_prompt(user_prompt))
@@ -136,9 +140,12 @@ class Assistant(Escalation, Appointment):
         if is_finalized: return
         logging.warning(f"[BOOKING CONTEXT] '{booking_context}'")
 
+        # extract the summary for injection
+        ai_summary = analysis_results.get("summary", "")
+        summary_context = f"\n[SYSTEM ANALYSIS OF LEAD'S MESSAGE: {ai_summary}]\n" if ai_summary else ""
+        
         # generate AI content
-        user_prompt = REPLY_USER_PROMPT.format(
-            received_body=stripped_body) + booking_context
+        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body) + summary_context + booking_context
         prompts = self.get_default_message_prompt()
         prompts.append(self.build_user_message_prompt(user_prompt))
 

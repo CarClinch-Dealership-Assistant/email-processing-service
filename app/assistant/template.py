@@ -1,4 +1,5 @@
 import html as html_lib
+from dateutil import parser, tz
 
 content = """
 <!DOCTYPE html>
@@ -261,9 +262,21 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
 
     thread_rows = ""
 
+    # Define Eastern Time for the local conversion
+    eastern_tz = tz.gettz("America/Toronto")
+
     for msg in messages:
         role = msg.get("role", "unknown").capitalize()
-        timestamp = msg.get("timestamp", "")
+        raw_timestamp = msg.get("timestamp", "")
+        formatted_timestamp = raw_timestamp
+        if raw_timestamp:
+            try:
+                dt = parser.parse(raw_timestamp)
+                dt_local = dt.astimezone(eastern_tz)
+                formatted_timestamp = dt_local.strftime("%b %d, %Y at %I:%M %p %Z")
+            except Exception:
+                pass
+
         body = html_lib.escape(msg.get("body", "").replace("<br />", "\n").strip())
         subject_line = html_lib.escape(msg.get("subject", ""))
 
@@ -279,7 +292,7 @@ def build_escalation_email_template(conversation_id: str, customer_email: str, p
             bg=bg,
             label_color=label_color,
             role=role,
-            timestamp=timestamp,
+            timestamp=formatted_timestamp,
             subject_line_html=subject_line_html,
             body=body,
         )
