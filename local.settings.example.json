@@ -1,0 +1,30 @@
+{
+  "IsEncrypted": false,
+    "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    
+    "FOLLOWUP_TIMER": "24,24,24",
+    "FOLLOWUP_TIME_STRUCTURE": "hours",
+    "ADMIN_EMAIL": "<admin email of choice; optional>",
+    
+    "AzureWebJobsServiceBus__fullyQualifiedNamespace": "<your-namespace>.servicebus.windows.net",
+    "SB_NAMESPACE": "<your-namespace>.servicebus.windows.net",
+    
+    "COSMOS_ENDPOINT": "https://<your-cosmos-account>.documents.azure.com:443/",
+    "COSMOS_DB_NAME": "CarClinchDB",
+    "COSMOS_VERIFY_SSL": "true",
+    
+    "STORAGE_ACCOUNT_NAME": "<your-storage-account-name>",
+    
+    "GMAIL_USER": "<sender email of choice>",
+    "GMAIL_APP_PASSWORD": "<sender email app password>",
+    
+    "OPENAI_API_KEY": "your-azure-ai-foundry-key",
+    "OPENAI_BASE_URL": "https://<your-foundry-endpoint>.cognitive.microsoft.com/openai/v1",
+    "OPENAI_MODEL_NAME": "gpt-4.1-mini"
+  },
+  "Host": {
+    "CORS": "*"
+  }
+}

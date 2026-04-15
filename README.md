@@ -67,7 +67,7 @@ Establish a `local.settings.json` file (for Azure Functions execution) or a `.en
     "SB_NAMESPACE": "<your-namespace>.servicebus.windows.net",
     
     "COSMOS_ENDPOINT": "https://<your-cosmos-account>.documents.azure.com:443/",
-    "COSMOS_DB_NAME": "carclinch-db",
+    "COSMOS_DB_NAME": "CarClinchDB",
     "COSMOS_VERIFY_SSL": "true",
     
     "STORAGE_ACCOUNT_NAME": "<your-storage-account-name>",
@@ -102,11 +102,9 @@ Establish a `local.settings.json` file (for Azure Functions execution) or a `.en
    func start
    ```
 
-## Testing Configuration
+## Testing
 
-The service employs `pytest` alongside a robust mocking architecture to validate business logic without executing live network calls (e.g., external SMTP transmissions or Cosmos DB write operations).
-
-To execute the complete unit testing suite, run:
+Run:
 ```bash
 pytest -v
 ```

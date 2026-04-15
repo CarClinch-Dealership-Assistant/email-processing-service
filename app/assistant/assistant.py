@@ -13,7 +13,7 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 
 class Assistant(Escalation, Appointment):
     """
-    Main assistant class that inherits from both Escalation and Appointment to handle all related functionalities.
+    Main assistant class that inherits from both Escalation and Appointment to handle all related functionalities. Directly called by the Durable Function orchestration.
     The Assistant class is responsible for:
         - Handling initial contact from lead form intake via the `contact` method.
         - Processing subsequent replies from leads via the `reply` method.
