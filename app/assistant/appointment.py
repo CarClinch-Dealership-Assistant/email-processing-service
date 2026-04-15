@@ -4,9 +4,10 @@ import os
 import uuid
 from app.email.factory import EmailFactory, DEFAULT_EMAIL_PROVIDER
 from app.assistant.base import BaseAssistant
+from app.assistant.prompts import BOOKING_DATE_NOTIFICATION, BOOKING_TIME_NOTIFICATION, BOOKING_TIME_HAS_SLOTS, BOOKING_TIME_NO_SLOTS
 from datetime import datetime, timezone, timedelta, date
 from app.assistant.template import build_confirmation_email_template, build_dealer_notification_template, build_date_table, build_time_table
-from email.utils import make_msgid
+# from email.utils import make_msgid
 from dateutil import parser
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
@@ -94,50 +95,42 @@ class Appointment(BaseAssistant):
         dates_str_from_llm = analysis_results.get("appointmentDate", "")
         candidates = self.get_candidate_dates(dates_str_from_llm)
 
-        # check if they provided an integer time with a date range
         requested_time_int = analysis_results.get("appointmentTime")
-        logging.warning(f"[BOOKING CONTEXT] action: {action}, date(s): {candidates}, time: {requested_time_int}")
         time_context = ""
         if requested_time_int is not None:
             formatted_time = self.fmt_time(requested_time_int)
-            time_context = f" The user specifically requested {formatted_time}. Only suggest dates from the list below where {formatted_time} is available."
+            time_context = f" The user specifically requested {formatted_time}. Only suggest dates where {formatted_time} is available."
 
         display_labels = [date.fromisoformat(d).strftime("%A, %B %d") for d in candidates]
         dates_str = ", ".join(display_labels)
 
-        # remove newlines so _process_response doesn't inject <br> tags inside the table HTML
-        table_html = build_date_table(candidates).replace("\n", "")
+        # store candidates for post-processing injection
+        self._pending_date_candidates = candidates
 
-        return (
-            f"\n\n[SYSTEM NOTIFICATION: The lead wants to book a test drive.{time_context} "
-            f"You MUST suggest ONLY the following dates and no others: {dates_str}. "
-            f"Do not suggest today or any date not on this list. "
-            f"Include this table exactly as-is in your reply: {table_html}]"
+        return BOOKING_DATE_NOTIFICATION.format(
+            time_context=time_context,
+            dates_str=dates_str,
         )
 
     def build_request_time_context(self, dealer_id: str, analysis_results: dict):
         date_str = analysis_results.get("appointmentDate")
-        time_range = analysis_results.get("preferredTimeRange")  # <-- EXTRACT IT HERE
-
-        # PASS IT HERE
+        time_range = analysis_results.get("preferredTimeRange")
         avail_slots = self.get_available_timeslots(dealer_id, date_str, time_range)
-
         time_labels = [self.fmt_time(s) for s in avail_slots] if avail_slots else []
         slots_str = ", ".join(time_labels) if time_labels else "No available timeslots for this date."
 
-        table_html = build_time_table(time_labels).replace("\n", "") if time_labels else ""
-
-        # Format the time range into a readable string for the LLM context if it exists
         pref_text = ""
         if time_range and isinstance(time_range, list) and len(time_range) == 2:
             pref_text = f" between {self.fmt_time(int(time_range[0]))} and {self.fmt_time(int(time_range[1]))}"
 
-        return (
-            f"\n\n[SYSTEM NOTIFICATION: The user requested an appointment on {date_str}{pref_text}. "
-            f"Available timeslots: {slots_str}. "
-            f"You MUST suggest ONLY the available timeslots listed above and NO OTHERS. "
-            f"If the user requests a time that is not in the list or asks for a time that is not on the exact hour, you MUST tell them it is unavailable. "
-            f"{'Include this table exactly as-is in your reply: ' + table_html if table_html else 'Inform the lead there are no available times on this date and ask them to choose another date.'}]"
+        # store for post-processing injection
+        self._pending_time_labels = time_labels
+
+        return BOOKING_TIME_NOTIFICATION.format(
+            date_str=date_str,
+            pref_text=pref_text,
+            slots_str=slots_str if slots_str else "No available timeslots for this date.",
+            slot_instruction=BOOKING_TIME_NO_SLOTS if not time_labels else BOOKING_TIME_HAS_SLOTS,
         )
 
     def build_booking_context(self, action: str, dealer_id: str, analysis_results: dict) -> str:
@@ -199,16 +192,16 @@ class Appointment(BaseAssistant):
             "appointmentDate": date_str,
             "timeslot": str(timeslot)
         }
-        self.dbcli.appointments_container.update_item_in_container(appt_doc)
+        self.dbcli.appointments_container.update_item(appt_doc)
         logging.warning(f"[BOOKING SUCCESS] Appointment written to DB for {date_str} at {timeslot}.")
 
-        self.set_conversation_status(id_context["conversationId"], 0)
+        self.set_conversation_status(id_context["conversationId"], id_context["leadId"], 0)
 
-        leads = self.dbcli.leads_container.get_item_with_id(id_context["leadId"])
-        if leads:
-            lead_doc = leads[0]
+        lead_doc = self.dbcli.leads_container.get_item_with_id(id_context["leadId"])
+        if lead_doc:
             lead_doc["status"] = 1
-            self.dbcli.leads_container.update_item_in_container(lead_doc)
+            logging.warning(f"Updating lead {lead_doc} status to 1 (booked)")
+            self.dbcli.leads_container.update_item(lead_doc)
 
         customer = self.hydrate_customer_context(id_context)
         vehicle = customer["vehicle"]
@@ -221,7 +214,7 @@ class Appointment(BaseAssistant):
         body_text = f"You are all set for a test drive on {date_str} at {time_am_pm}. A calendar invitation is attached to this email. We look forward to seeing you!"
         email_content = build_confirmation_email_template(vehicle, date_str, time_am_pm)
 
-        msg_id = make_msgid()
+        msg_id = self.make_msgid(id_context["conversationId"])
 
         if received_email:
             EmailFactory.get_provider(DEFAULT_EMAIL_PROVIDER).reply(
@@ -252,7 +245,7 @@ class Appointment(BaseAssistant):
                 dealer_email,
                 dealer_subject,
                 dealer_body,
-                msg_id=make_msgid(),
+                msg_id=self.make_msgid(id_context["conversationId"]),
                 attachments=[("invite.ics", ics_content, "text/calendar")]
             )
             logging.info(f"Appointment confirmation forwarded to dealership at {dealer_email}.")
@@ -267,7 +260,7 @@ class Appointment(BaseAssistant):
                 ADMIN_EMAIL,
                 admin_subject,
                 admin_body,
-                msg_id=make_msgid(),
+                msg_id=self.make_msgid(id_context["conversationId"]),
                 attachments=[("invite.ics", ics_content, "text/calendar")]
             )
             logging.info(f"Appointment notification sent to admin at {ADMIN_EMAIL}.")
@@ -281,8 +274,21 @@ class Appointment(BaseAssistant):
 
         action = analysis_results.get("intentAction")
         date_str = analysis_results.get("appointmentDate", "")
+        time_int = analysis_results.get("appointmentTime")
 
-        # SAFEGUARD 1: prevent multi-date booking
+        # safeguard: auto-upgrade to confirm_booking if we have a single date and a valid time
+        if action == "request_time" and time_int is not None and date_str and "," not in date_str:
+            logging.warning(f"[SAFEGUARD] Auto-upgraded request_time to confirm_booking for {date_str} at {time_int}:00.")
+            action = "confirm_booking"
+            analysis_results["intentAction"] = "confirm_booking"
+            
+        # safeguard: auto-correct single dates incorrectly classified as ranges
+        if action == "request_date_range" and date_str and "," not in date_str:
+            logging.warning(f"[SAFEGUARD] Auto-corrected request_date_range to request_time for single date {date_str}.")
+            action = "request_time"
+            analysis_results["intentAction"] = "request_time"
+
+        # safeguard 1: prevent multi-date booking
         if action == "confirm_booking":
             logging.warning("Checking for multi-date input in confirm_booking action: " + date_str)
             if date_str and "," in date_str:
@@ -291,14 +297,14 @@ class Appointment(BaseAssistant):
                 action = "request_date_range"
                 analysis_results["intentAction"] = "request_date_range"
 
-        # SAFEGUARD 2: catch invalid times combined with a date range
+        # safeguard: catch invalid times combined with a date range
         if action == "request_time" and date_str and "," in date_str:
             logging.warning(
                 f"[SAFEGUARD] Caught date range combined with invalid time. Downgrading to request_date_range.")
             action = "request_date_range"
             analysis_results["intentAction"] = "request_date_range"
 
-        # Finalize Booking
+        # finalize booking check
         if action == "confirm_booking" and analysis_results.get("appointmentDate") and analysis_results.get(
                 "appointmentTime") is not None:
             parsed = {
@@ -313,6 +319,6 @@ class Appointment(BaseAssistant):
                 self.finalize_booking(id_context, parsed, email_address)  # Contact
             return "", True
 
-        # Build Context Array
+        # build context array
         booking_context = self.build_booking_context(action, id_context["dealerId"], analysis_results)
         return booking_context, False

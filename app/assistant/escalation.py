@@ -35,7 +35,7 @@ class Escalation(BaseAssistant):
         )
 
         # close the conversation to halt any running follow-up timers
-        self.set_conversation_status(conversation_id, status=0)
+        self.set_conversation_status(conversation_id, id_context["leadId"], 0)
 
         # fetch full thread for the dealership email
         messages = self.dbcli.message_container.query_items_with_conversation(conversation_id)

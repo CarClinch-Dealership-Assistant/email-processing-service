@@ -26,6 +26,14 @@ class DBClient:
             connection_verify=self.verify_ssl
         )
 
+    def _read_item_by_id_and_partition(self, container_name: str, item_id: str, partition_key: str) -> dict:
+        try:
+            container = self.get_container_client(self.database, container_name)
+            # read_item is significantly cheaper and faster than query_items
+            return container.read_item(item=item_id, partition_key=partition_key)
+        except exceptions.CosmosResourceNotFoundError:
+            return None
+        
     def _get_database_client(self, db_name: str):
         return self.client.get_database_client(db_name)
 
@@ -40,10 +48,16 @@ class DBClient:
             logging.error(f"save_message failed: {e.message}")
             return None
 
-    def query_items(self, container_name: str, query: str, params: list) -> list:
+    def query_items(self, container_name: str, query: str, params: list, partition_key: str = None) -> list:
         try:
             container = self.get_container_client(self.database, container_name)
-            items = container.query_items(query=query, parameters=params, enable_cross_partition_query=True)
+            
+            # if partition key, pass it; otherwise, fan out
+            if partition_key:
+                items = container.query_items(query=query, parameters=params, partition_key=partition_key)
+            else:
+                items = container.query_items(query=query, parameters=params, enable_cross_partition_query=True)
+                
             return list(items)
         except exceptions.CosmosHttpResponseError as e:
             logging.error(f"Query failed: {e.message}")
@@ -70,8 +84,8 @@ class CosmosDBContainer(DBClient):
         super().__init__()
         self.container_name = container_name
 
-    def query_items_with_params(self, query: str, params: list[dict[str, str]]):
-        return self.query_items(self.container_name, query, params)
+    def query_items_with_params(self, query: str, params: list[dict[str, str]], partition_key: str = None):
+        return self.query_items(self.container_name, query, params, partition_key=partition_key)
 
     def update_item(self, item: dict) -> dict:
         return self.update_item_in_container(self.container_name, item)
@@ -96,6 +110,9 @@ class ConversationContainer(CosmosDBContainer):
     def __init__(self):
         super().__init__(self.container_conversations)
 
+    def get_conversation_by_lead(self, conversation_id: str, lead_id: str) -> dict:
+        return self._read_item_by_id_and_partition(self.container_name, conversation_id, lead_id)
+    
     def query_items_with_lead(self, lead_id: str):
         query = "SELECT * FROM c WHERE c.leadId = @leadId AND c.status = 1 ORDER BY c.timestamp DESC OFFSET 0 LIMIT 1"
         params = [{"name": "@leadId", "value": lead_id}]
@@ -122,20 +139,20 @@ class MessagesContainer(CosmosDBContainer):
     def __init__(self):
         super().__init__(self.container_messages)
 
-    def query_assistant_items_with_msg_id(self, msg_id: str):
+    def query_assistant_items_with_msg_id(self, msg_id: str, conversation_id: str):
         query = "SELECT * FROM c WHERE c.emailMessageId = @msgId AND c.role = 'assistant'"
         params = [{"name": "@msgId", "value": msg_id}]
-        return self.query_items_with_params(query, params)
+        return self.query_items_with_params(query, params, partition_key=conversation_id)
 
     def query_user_items_with_conversation_and_time(self, conversation_id: str, startTime: str):
         query = "SELECT * FROM c WHERE c.conversationId = @convId AND c.role = 'user' AND c.timestamp > @startTime"
         params = [{"name": "@convId", "value": conversation_id}, {"name": "@startTime", "value": startTime}]
-        return self.query_items_with_params(query, params)
+        return self.query_items_with_params(query, params, partition_key=conversation_id)
 
     def query_items_with_conversation(self, conversation_id: str):
         query = "SELECT * FROM c WHERE c.conversationId = @convId ORDER BY c.timestamp ASC"
         params = [{"name": "@convId", "value": conversation_id}]
-        return self.query_items_with_params(query, params)
+        return self.query_items_with_params(query, params, partition_key=conversation_id)
 
 class AppointmentsContainer(CosmosDBContainer):
     container_appointments = "appointments"
