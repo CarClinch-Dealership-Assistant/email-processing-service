@@ -369,6 +369,12 @@ class Appointment(BaseAssistant):
         action = analysis_results.get("intentAction")
         date_str = analysis_results.get("appointmentDate", "")
         time_int = analysis_results.get("appointmentTime")
+        
+        # safeguard: auto-downgrade confirm_booking to request_time if exact time is missing
+        if action == "confirm_booking" and time_int is None:
+            logging.warning(f"[SAFEGUARD] Auto-downgraded confirm_booking to request_time because appointmentTime is missing (fuzzy time requested).")
+            action = "request_time"
+            analysis_results["intentAction"] = "request_time"
 
         # safeguard: auto-upgrade to confirm_booking if we have a single date and a valid time
         if action == "request_time" and time_int is not None and date_str and "," not in date_str:
@@ -382,7 +388,7 @@ class Appointment(BaseAssistant):
             action = "request_time"
             analysis_results["intentAction"] = "request_time"
 
-        # safeguard 1: prevent multi-date booking
+        # safeguard: prevent multi-date booking
         if action == "confirm_booking":
             logging.warning("Checking for multi-date input in confirm_booking action: " + date_str)
             if date_str and "," in date_str:
