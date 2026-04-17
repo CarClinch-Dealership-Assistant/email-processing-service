@@ -176,8 +176,12 @@ class Assistant(Escalation, Appointment):
         ai_summary = analysis_results.get("summary", "")
         summary_context = f"\n[SYSTEM ANALYSIS OF LEAD'S MESSAGE: {ai_summary}]\n" if ai_summary else ""
         
+        customer = self.hydrate_customer_context(id_context)
+        data = self.get_formatting_data(customer)
+        data["received_body"] = stripped_body
+        
         # generate AI content
-        user_prompt = REPLY_USER_PROMPT.format(received_body=stripped_body) + summary_context + booking_context
+        user_prompt = REPLY_USER_PROMPT.format(**data) + summary_context + booking_context
         prompts = self.get_default_message_prompt()
         prompts.append(self.build_user_message_prompt(user_prompt))
 
